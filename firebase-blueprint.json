@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "Arena": {
+      "title": "Arena",
+      "description": "Gelanggang pertandingan Pencak Silat yang dikelola oleh Sekretaris/Panitia.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "tournamentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "activeMatchId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "tournamentName", "ownerId", "activeMatchId", "createdAt", "updatedAt"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Partai pertandingan kategori Tanding sesuai peraturan IPSI 2026 & PERSILAT.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "matchNumber": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "weightClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "stage": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "blueName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "blueContingent": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "redName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "redContingent": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "roundDurationSec": { "type": "integer" },
+        "currentRound": { "type": "integer" },
+        "status": { "type": "string", "enum": ["waiting", "active", "paused", "break", "finished"] },
+        "timerRemainingMs": { "type": "integer" },
+        "timerStartedAtMs": { "type": "integer" },
+        "blueScore": { "type": "integer" },
+        "redScore": { "type": "integer" },
+        "bluePunches": { "type": "integer" },
+        "blueKicks": { "type": "integer" },
+        "blueFalls": { "type": "integer" },
+        "blueBinaan": { "type": "integer" },
+        "blueTeguran1": { "type": "integer" },
+        "blueTeguran2": { "type": "integer" },
+        "bluePeringatan": { "type": "integer" },
+        "redPunches": { "type": "integer" },
+        "redKicks": { "type": "integer" },
+        "redFalls": { "type": "integer" },
+        "redBinaan": { "type": "integer" },
+        "redTeguran1": { "type": "integer" },
+        "redTeguran2": { "type": "integer" },
+        "redPeringatan": { "type": "integer" },
+        "judge1Vote": { "type": "object", "properties": {} },
+        "judge2Vote": { "type": "object", "properties": {} },
+        "judge3Vote": { "type": "object", "properties": {} },
+        "winner": { "type": "string", "enum": ["blue", "red", "draw", ""] },
+        "winMethod": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "arenaId", "ownerId", "matchNumber", "weightClass", "stage",
+        "blueName", "blueContingent", "redName", "redContingent",
+        "roundDurationSec", "currentRound", "status", "timerRemainingMs", "timerStartedAtMs",
+        "blueScore", "redScore", "winner", "winMethod", "createdAt", "updatedAt"
+      ]
+    },
+    "MatchEvent": {
+      "title": "MatchEvent",
+      "description": "Log kejadian penilaian juri, wasit, pelanggaran, dan pengesahan skor.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "matchId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorRole": { "type": "string", "maxLength": 32 },
+        "corner": { "type": "string", "enum": ["blue", "red", "neutral"] },
+        "type": { "type": "string", "maxLength": 32 },
+        "pointsDelta": { "type": "integer" },
+        "round": { "type": "integer" },
+        "matchTimeFormatted": { "type": "string", "maxLength": 16 },
+        "description": { "type": "string", "maxLength": 200 },
+        "undone": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "arenaId", "matchId", "ownerId", "actorRole", "corner", "type", "pointsDelta", "round", "matchTimeFormatted", "description", "undone", "createdAt"]
+    },
+    "ArenaOperator": {
+      "title": "ArenaOperator",
+      "description": "Operator yang diizinkan mengakses gelanggang secara real-time.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["Sekretaris", "Dewan", "Timer", "Juri", "Scoreboard"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "arenaId", "ownerId", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/arenas/{arenaId}": {
+      "schema": { "$ref": "#/entities/Arena" },
+      "description": "Dokumen Gelanggang dan penunjuk partai aktif."
+    },
+    "/arenas/{arenaId}/operators/{operatorUid}": {
+      "schema": { "$ref": "#/entities/ArenaOperator" },
+      "description": "Daftar UID operator resmi pada gelanggang terkait."
+    },
+    "/arenas/{arenaId}/matches/{matchId}": {
+      "schema": { "$ref": "#/entities/Match" },
+      "description": "Data partai tanding beserta skor, timer, dan statistik teknik/pelanggaran."
+    },
+    "/arenas/{arenaId}/matches/{matchId}/events/{eventId}": {
+      "schema": { "$ref": "#/entities/MatchEvent" },
+      "description": "Riwayat kejadian nilai dan pelanggaran dalam partai tanding."
+    }
+  }
+}

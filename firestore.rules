@@ -1,0 +1,317 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUid(uid) {
+      return uid is string && uid.size() >= 1 && uid.size() <= 128 && uid.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function arenaDoc(arenaId) {
+      return get(/databases/$(database)/documents/arenas/$(arenaId));
+    }
+
+    function isArenaOwner(arenaId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/arenas/$(arenaId))
+        && arenaDoc(arenaId).data.ownerId == request.auth.uid;
+    }
+
+    function isArenaOperator(arenaId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/arenas/$(arenaId)/operators/$(request.auth.uid));
+    }
+
+    function canAccessArena(arenaId) {
+      return isArenaOwner(arenaId) || isArenaOperator(arenaId) || isAdmin();
+    }
+
+    // --- Validation Blueprints ---
+    function isValidArena(data) {
+      return data.keys().hasAll(['id', 'name', 'tournamentName', 'ownerId', 'activeMatchId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'tournamentName', 'ownerId', 'activeMatchId', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.tournamentName is string && data.tournamentName.size() >= 1 && data.tournamentName.size() <= 120
+        && isValidUid(data.ownerId)
+        && data.activeMatchId is string && data.activeMatchId.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOperator(data) {
+      return data.keys().hasAll(['uid', 'arenaId', 'ownerId', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'arenaId', 'ownerId', 'role', 'createdAt'])
+        && isValidUid(data.uid)
+        && isValidId(data.arenaId)
+        && isValidUid(data.ownerId)
+        && data.role in ['Sekretaris', 'Dewan', 'Timer', 'Juri', 'Scoreboard']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidJudgeVote(vote) {
+      return vote is map
+        && vote.keys().hasAll(['corner', 'points', 'timestampMs', 'round'])
+        && vote.keys().hasOnly(['corner', 'points', 'timestampMs', 'round', 'confirmed'])
+        && vote.corner in ['blue', 'red', 'none']
+        && vote.points is int && vote.points >= 0 && vote.points <= 3
+        && vote.timestampMs is int && vote.timestampMs >= 0
+        && vote.round is int && vote.round >= 1 && vote.round <= 3;
+    }
+
+    function isValidMatch(data) {
+      return data.keys().hasAll([
+          'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage',
+          'blueName', 'blueContingent', 'redName', 'redContingent',
+          'roundDurationSec', 'currentRound', 'status', 'timerRemainingMs', 'timerStartedAtMs',
+          'blueScore', 'redScore', 'bluePunches', 'blueKicks', 'blueFalls',
+          'blueBinaan', 'blueTeguran1', 'blueTeguran2', 'bluePeringatan',
+          'redPunches', 'redKicks', 'redFalls', 'redBinaan', 'redTeguran1',
+          'redTeguran2', 'redPeringatan', 'winner', 'winMethod', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage',
+          'blueName', 'blueContingent', 'redName', 'redContingent',
+          'roundDurationSec', 'currentRound', 'status', 'timerRemainingMs', 'timerStartedAtMs',
+          'blueScore', 'redScore', 'bluePunches', 'blueKicks', 'blueFalls',
+          'blueBinaan', 'blueTeguran1', 'blueTeguran2', 'bluePeringatan',
+          'redPunches', 'redKicks', 'redFalls', 'redBinaan', 'redTeguran1',
+          'redTeguran2', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote',
+          'winner', 'winMethod', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.arenaId)
+        && isValidUid(data.ownerId)
+        && data.matchNumber is string && data.matchNumber.size() >= 1 && data.matchNumber.size() <= 32
+        && data.weightClass is string && data.weightClass.size() >= 1 && data.weightClass.size() <= 80
+        && data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 40
+        && data.blueName is string && data.blueName.size() >= 1 && data.blueName.size() <= 80
+        && data.blueContingent is string && data.blueContingent.size() >= 1 && data.blueContingent.size() <= 80
+        && data.redName is string && data.redName.size() >= 1 && data.redName.size() <= 80
+        && data.redContingent is string && data.redContingent.size() >= 1 && data.redContingent.size() <= 80
+        && data.roundDurationSec is int && data.roundDurationSec >= 30 && data.roundDurationSec <= 300
+        && data.currentRound is int && data.currentRound >= 1 && data.currentRound <= 3
+        && data.status in ['waiting', 'active', 'paused', 'break', 'finished']
+        && data.timerRemainingMs is int && data.timerRemainingMs >= 0 && data.timerRemainingMs <= 600000
+        && data.timerStartedAtMs is int && data.timerStartedAtMs >= 0
+        && data.blueScore is int && data.blueScore >= -100 && data.blueScore <= 999
+        && data.redScore is int && data.redScore >= -100 && data.redScore <= 999
+        && data.bluePunches is int && data.bluePunches >= 0 && data.bluePunches <= 999
+        && data.blueKicks is int && data.blueKicks >= 0 && data.blueKicks <= 999
+        && data.blueFalls is int && data.blueFalls >= 0 && data.blueFalls <= 99
+        && data.blueBinaan is int && data.blueBinaan >= 0 && data.blueBinaan <= 20
+        && data.blueTeguran1 is int && data.blueTeguran1 >= 0 && data.blueTeguran1 <= 20
+        && data.blueTeguran2 is int && data.blueTeguran2 >= 0 && data.blueTeguran2 <= 20
+        && data.bluePeringatan is int && data.bluePeringatan >= 0 && data.bluePeringatan <= 3
+        && data.redPunches is int && data.redPunches >= 0 && data.redPunches <= 999
+        && data.redKicks is int && data.redKicks >= 0 && data.redKicks <= 999
+        && data.redFalls is int && data.redFalls >= 0 && data.redFalls <= 99
+        && data.redBinaan is int && data.redBinaan >= 0 && data.redBinaan <= 20
+        && data.redTeguran1 is int && data.redTeguran1 >= 0 && data.redTeguran1 <= 20
+        && data.redTeguran2 is int && data.redTeguran2 >= 0 && data.redTeguran2 <= 20
+        && data.redPeringatan is int && data.redPeringatan >= 0 && data.redPeringatan <= 3
+        && (!('judge1Vote' in data) || isValidJudgeVote(data.judge1Vote))
+        && (!('judge2Vote' in data) || isValidJudgeVote(data.judge2Vote))
+        && (!('judge3Vote' in data) || isValidJudgeVote(data.judge3Vote))
+        && data.winner in ['blue', 'red', 'draw', '']
+        && data.winMethod is string && data.winMethod.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMatchEvent(data) {
+      return data.keys().hasAll([
+          'id', 'arenaId', 'matchId', 'ownerId', 'actorRole', 'corner',
+          'type', 'pointsDelta', 'round', 'matchTimeFormatted', 'description', 'undone', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'arenaId', 'matchId', 'ownerId', 'actorRole', 'corner',
+          'type', 'pointsDelta', 'round', 'matchTimeFormatted', 'description', 'undone', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.arenaId)
+        && isValidId(data.matchId)
+        && isValidUid(data.ownerId)
+        && data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 32
+        && data.corner in ['blue', 'red', 'neutral']
+        && data.type is string && data.type.size() >= 1 && data.type.size() <= 32
+        && data.pointsDelta is int && data.pointsDelta >= -20 && data.pointsDelta <= 20
+        && data.round is int && data.round >= 1 && data.round <= 3
+        && data.matchTimeFormatted is string && data.matchTimeFormatted.size() >= 1 && data.matchTimeFormatted.size() <= 16
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 200
+        && data.undone is bool
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+    match /admins/{adminUid} {
+      allow get: if isVerifiedUser() && request.auth.uid == adminUid;
+    }
+
+    match /arenas/{arenaId} {
+      allow get: if isValidId(arenaId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid || isArenaOperator(arenaId) || isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(arenaId) && isVerifiedUser()
+        && isValidArena(incoming())
+        && incoming().id == arenaId
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(arenaId) && isVerifiedUser()
+        && isValidArena(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tournamentName', 'activeMatchId', 'updatedAt'])
+        );
+      allow delete: if isValidId(arenaId) && isVerifiedUser() && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+
+      match /operators/{operatorUid} {
+        allow get: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser() && (
+          request.auth.uid == operatorUid || isArenaOwner(arenaId) || isAdmin()
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser()
+          && isValidOperator(incoming())
+          && incoming().uid == operatorUid
+          && incoming().arenaId == arenaId
+          && incoming().createdAt == request.time
+          && isArenaOwner(arenaId)
+          && incoming().ownerId == arenaDoc(arenaId).data.ownerId;
+        allow delete: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser() && (
+          isArenaOwner(arenaId) || isAdmin()
+        );
+      }
+
+      match /matches/{matchId} {
+        allow get: if isValidId(arenaId) && isValidId(matchId) && canAccessArena(arenaId);
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidId(arenaId) && isValidId(matchId) && isVerifiedUser()
+          && isValidMatch(incoming())
+          && incoming().id == matchId
+          && incoming().arenaId == arenaId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isArenaOwner(arenaId)
+          && incoming().ownerId == request.auth.uid;
+        allow update: if isValidId(arenaId) && isValidId(matchId) && isVerifiedUser()
+          && isValidMatch(incoming())
+          && incoming().id == existing().id
+          && incoming().arenaId == existing().arenaId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && canAccessArena(arenaId)
+          && (
+            isAdmin() ||
+            (
+              existing().status != 'finished' && (
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'timerRemainingMs', 'timerStartedAtMs', 'status', 'currentRound', 'updatedAt'
+                ]) ||
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'judge1Vote', 'judge2Vote', 'judge3Vote',
+                  'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks', 'updatedAt'
+                ]) ||
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
+                  'blueFalls', 'redFalls', 'blueBinaan', 'redBinaan',
+                  'blueTeguran1', 'redTeguran1', 'blueTeguran2', 'redTeguran2',
+                  'bluePeringatan', 'redPeringatan', 'status', 'winner', 'winMethod', 'updatedAt'
+                ]) ||
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'matchNumber', 'weightClass', 'stage', 'blueName', 'blueContingent',
+                  'redName', 'redContingent', 'roundDurationSec', 'currentRound', 'status',
+                  'timerRemainingMs', 'timerStartedAtMs', 'updatedAt'
+                ])
+              )
+            ) ||
+            (
+              isArenaOwner(arenaId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'winner', 'winMethod', 'currentRound', 'timerRemainingMs', 'timerStartedAtMs',
+                'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
+                'blueFalls', 'redFalls', 'blueBinaan', 'redBinaan',
+                'blueTeguran1', 'redTeguran1', 'blueTeguran2', 'redTeguran2',
+                'bluePeringatan', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isValidId(arenaId) && isValidId(matchId) && isVerifiedUser() && (
+          isArenaOwner(arenaId) || isAdmin()
+        );
+
+        match /events/{eventId} {
+          allow get: if isValidId(arenaId) && isValidId(matchId) && isValidId(eventId) && canAccessArena(arenaId);
+          allow list: if isVerifiedUser() && (
+            resource.data.ownerId == request.auth.uid || isAdmin()
+          );
+          allow create: if isValidId(arenaId) && isValidId(matchId) && isValidId(eventId) && isVerifiedUser()
+            && isValidMatchEvent(incoming())
+            && incoming().id == eventId
+            && incoming().arenaId == arenaId
+            && incoming().matchId == matchId
+            && incoming().createdAt == request.time
+            && canAccessArena(arenaId)
+            && exists(/databases/$(database)/documents/arenas/$(arenaId)/matches/$(matchId))
+            && incoming().ownerId == arenaDoc(arenaId).data.ownerId;
+          allow update: if isValidId(arenaId) && isValidId(matchId) && isValidId(eventId) && isVerifiedUser()
+            && isValidMatchEvent(incoming())
+            && incoming().id == existing().id
+            && incoming().arenaId == existing().arenaId
+            && incoming().matchId == existing().matchId
+            && incoming().ownerId == existing().ownerId
+            && incoming().createdAt == existing().createdAt
+            && canAccessArena(arenaId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['undone']);
+          allow delete: if isValidId(arenaId) && isValidId(matchId) && isValidId(eventId) && isVerifiedUser() && (
+            isArenaOwner(arenaId) || isAdmin()
+          );
+        }
+      }
+    }
+  }
+}

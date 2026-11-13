@@ -1,0 +1,6 @@
+{
+  "name": "Skoring Pencak Silat Tanding",
+  "description": "Aplikasi digital skoring Pencak Silat kategori Tanding sesuai Peraturan IPSI 2026 & PERSILAT dengan sinkronisasi real-time Firebase dan ekspor laporan PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
