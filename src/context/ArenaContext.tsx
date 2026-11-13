@@ -8,6 +8,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   useFirestoreSync,
@@ -17,14 +18,23 @@ import {
 } from '../hooks/useFirestoreSync';
 import { auth, db, googleProvider, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from '../lib/firebase';
 import type {
+  ArenaCourt,
   ArenaData,
+  AthleteAgeCategory,
+  AthleteData,
+  AthleteGender,
+  BracketMatchSlot,
+  BracketMode,
+  CompetitionCategory,
   Corner,
   DewanActionType,
   JudgeId,
   MatchData,
   MatchEvent,
   MatchStatus,
+  PemasalanPoolSize,
 } from '../types/silat';
+import { buildTournamentBracketSlots } from '../utils/bracketBuilder';
 import {
   applyDewanAction,
   determineOfficialWinner,
@@ -87,6 +97,10 @@ function createDefaultSeed(): LocalStorePayload {
       id: defaultArenaId,
       name: 'Gelanggang A',
       tournamentName: 'Kejuaraan Nasional Pencak Silat IPSI 2026',
+      venue: '',
+      eventDate: '',
+      logoLeft: '',
+      logoRight: '',
       ownerId: 'local-operator',
       activeMatchId: defaultMatchId,
     },
@@ -94,6 +108,8 @@ function createDefaultSeed(): LocalStorePayload {
     eventsByMatch: {
       [defaultMatchId]: [],
     },
+    athletes: [],
+    brackets: [],
   };
 }
 
@@ -127,6 +143,35 @@ export interface CreateMatchInput {
   setAsActive?: boolean;
 }
 
+export interface UpdateArenaMetaInput {
+  tournamentName: string;
+  venue: string;
+  eventDate: string;
+  logoLeft: string;
+  logoRight: string;
+  name?: string;
+}
+
+export interface AddAthleteInput {
+  name: string;
+  contingent: string;
+  weightClass: string;
+  gender: AthleteGender;
+  ageCategory: AthleteAgeCategory;
+  competitionCategory: CompetitionCategory;
+  gelanggang: ArenaCourt;
+}
+
+export interface GenerateBracketInput {
+  weightClass: string;
+  gender: AthleteGender;
+  bracketMode: BracketMode;
+  poolSize?: PemasalanPoolSize;
+  ageCategory?: AthleteAgeCategory | 'Semua';
+  competitionCategory?: CompetitionCategory;
+  gelanggang?: ArenaCourt | 'Semua';
+}
+
 interface ArenaContextValue {
   mode: 'local' | 'firebase' | 'rtdb';
   rtdbConnected: boolean;
@@ -138,10 +183,13 @@ interface ArenaContextValue {
   matches: MatchData[];
   activeMatch: MatchData;
   events: MatchEvent[];
+  getMatchEvents: (matchId: string) => MatchEvent[];
+  athletes: AthleteData[];
+  brackets: BracketMatchSlot[];
   liveTimerMs: number;
   signInGoogle: () => Promise<void>;
   signOutGoogle: () => Promise<void>;
-  updateArenaMeta: (name: string, tournamentName: string) => Promise<void>;
+  updateArenaMeta: (meta: UpdateArenaMetaInput) => Promise<void>;
   joinArenaById: (arenaId: string) => Promise<boolean>;
   addOperatorUid: (uid: string, role: 'Sekretaris' | 'Dewan' | 'Timer' | 'Juri' | 'Scoreboard') => Promise<void>;
   createMatch: (input: CreateMatchInput) => Promise<void>;
@@ -149,6 +197,16 @@ interface ArenaContextValue {
   setActiveMatch: (matchId: string) => Promise<void>;
   deleteMatch: (matchId: string) => Promise<void>;
   resetMatch: (matchId: string) => Promise<void>;
+  addAthlete: (input: AddAthleteInput) => Promise<void>;
+  importAthletes: (inputs: AddAthleteInput[]) => Promise<number>;
+  deleteAthlete: (athleteId: string) => Promise<void>;
+  clearAthletes: () => Promise<void>;
+  generateBracket: (
+    input: GenerateBracketInput
+  ) => Promise<{ createdSlots: number; poolCount: number; error?: string }>;
+  activateBracketMatch: (slotId: string) => Promise<void>;
+  advanceBracketWinner: (slotId: string, winnerSide: Corner) => Promise<void>;
+  clearBracket: (weightClass: string, gender: AthleteGender) => Promise<void>;
   sendJudgeVote: (judgeId: JudgeId, corner: Corner, points: 1 | 2) => Promise<{ awarded: boolean }>;
   clearJudgeVote: (judgeId: JudgeId) => Promise<void>;
   triggerDewanAction: (action: DewanActionType, corner: Corner) => Promise<void>;
@@ -236,6 +294,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     cloudArena,
     cloudMatches,
     cloudEvents,
+    cloudAthletes,
+    cloudBrackets,
     rtdbConnected,
     syncError,
     setSyncError,
@@ -284,6 +344,26 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     if (mode === 'firebase') return cloudEvents;
     return localStore.eventsByMatch[activeMatch.id] || [];
   }, [mode, cloudEvents, localStore.eventsByMatch, activeMatch.id]);
+
+  const getMatchEvents = useCallback(
+    (matchId: string): MatchEvent[] => {
+      if (mode === 'firebase') {
+        return matchId === activeMatch.id ? cloudEvents : [];
+      }
+      return localStore.eventsByMatch[matchId] || [];
+    },
+    [mode, activeMatch.id, cloudEvents, localStore.eventsByMatch]
+  );
+
+  const athletes = useMemo(() => {
+    if (mode === 'firebase') return cloudAthletes;
+    return localStore.athletes || [];
+  }, [mode, cloudAthletes, localStore.athletes]);
+
+  const brackets = useMemo(() => {
+    if (mode === 'firebase') return cloudBrackets;
+    return localStore.brackets || [];
+  }, [mode, cloudBrackets, localStore.brackets]);
 
   // Live synced timer ticker (updates every 100ms while active or break)
   const [liveTimerMs, setLiveTimerMs] = useState<number>(() => getRemainingTimerMs(activeMatch));
@@ -371,15 +451,24 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateArenaMeta = useCallback(
-    async (name: string, tournamentName: string) => {
-      const safeName = clampStr(name, 80, 'Gelanggang A');
-      const safeTournament = clampStr(tournamentName, 120, 'Kejuaraan Pencak Silat IPSI 2026');
+    async (meta: UpdateArenaMetaInput) => {
+      const safeName = clampStr(meta.name || arena.name || 'Gelanggang A', 80, 'Gelanggang A');
+      const safeTournament = clampStr(meta.tournamentName, 120, 'Kejuaraan Pencak Silat IPSI 2026');
+      const safeVenue = meta.venue.trim().slice(0, 120);
+      const safeEventDate = meta.eventDate.trim().slice(0, 80);
+      const safeLogoLeft = meta.logoLeft.trim().slice(0, 250000);
+      const safeLogoRight = meta.logoRight.trim().slice(0, 250000);
+
       if (mode === 'firebase' && cloudArena) {
         const path = `arenas/${cloudArena.id}`;
         try {
           await updateDoc(doc(db, 'arenas', cloudArena.id), {
             name: safeName,
             tournamentName: safeTournament,
+            venue: safeVenue,
+            eventDate: safeEventDate,
+            logoLeft: safeLogoLeft,
+            logoRight: safeLogoRight,
             updatedAt: serverTimestamp(),
           });
         } catch (err) {
@@ -388,11 +477,19 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       } else {
         commitLocalStore((prev) => ({
           ...prev,
-          arena: { ...prev.arena, name: safeName, tournamentName: safeTournament },
+          arena: {
+            ...prev.arena,
+            name: safeName,
+            tournamentName: safeTournament,
+            venue: safeVenue,
+            eventDate: safeEventDate,
+            logoLeft: safeLogoLeft,
+            logoRight: safeLogoRight,
+          },
         }));
       }
     },
-    [mode, cloudArena, commitLocalStore]
+    [arena.name, mode, cloudArena, commitLocalStore]
   );
 
   const joinArenaById = useCallback(
@@ -1085,6 +1182,418 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [activeMatch, mode, cloudArena, commitLocalStore]
   );
 
+  const buildAthleteRecord = useCallback(
+    (input: AddAthleteInput, idxSeed = 0): AthleteData => {
+      const athleteId = sanitizeId(
+        `ath-${Date.now().toString(36)}-${idxSeed}-${Math.random().toString(36).slice(2, 5)}`
+      );
+      const validAgeCategories: AthleteAgeCategory[] = [
+        'Usia Dini 1',
+        'Usia Dini 2',
+        'Usia Dini',
+        'Pra Remaja',
+        'Remaja',
+        'Dewasa',
+        'Master',
+      ];
+      const validCompCategories: CompetitionCategory[] = ['Tanding', 'Jurus'];
+      const validCourts: ArenaCourt[] = ['A', 'B', 'C', 'D'];
+      return {
+        id: athleteId,
+        arenaId: arena.id,
+        ownerId: user?.uid || arena.ownerId,
+        name: clampStr(input.name, 80, 'Atlet Baru'),
+        contingent: clampStr(input.contingent, 80, 'Kontingen'),
+        weightClass: clampStr(input.weightClass, 80, 'Kelas Bebas'),
+        gender: input.gender === 'Putri' ? 'Putri' : 'Putra',
+        ageCategory: validAgeCategories.includes(input.ageCategory) ? input.ageCategory : 'Dewasa',
+        competitionCategory: validCompCategories.includes(input.competitionCategory)
+          ? input.competitionCategory
+          : 'Tanding',
+        gelanggang: validCourts.includes(input.gelanggang) ? input.gelanggang : 'A',
+        createdAtMs: Date.now() + idxSeed,
+      };
+    },
+    [arena.id, arena.ownerId, user]
+  );
+
+  const addAthlete = useCallback(
+    async (input: AddAthleteInput) => {
+      const newAthlete = buildAthleteRecord(input);
+
+      if (mode === 'firebase' && cloudArena && user) {
+        const path = `arenas/${cloudArena.id}/athletes/${newAthlete.id}`;
+        try {
+          await setDoc(doc(db, 'arenas', cloudArena.id, 'athletes', newAthlete.id), {
+            id: newAthlete.id,
+            arenaId: cloudArena.id,
+            ownerId: user.uid,
+            name: newAthlete.name,
+            contingent: newAthlete.contingent,
+            weightClass: newAthlete.weightClass,
+            gender: newAthlete.gender,
+            ageCategory: newAthlete.ageCategory,
+            competitionCategory: newAthlete.competitionCategory,
+            gelanggang: newAthlete.gelanggang,
+            createdAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, path);
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          athletes: [...(prev.athletes || []), newAthlete],
+        }));
+      }
+    },
+    [buildAthleteRecord, mode, cloudArena, user, commitLocalStore]
+  );
+
+  const importAthletes = useCallback(
+    async (inputs: AddAthleteInput[]): Promise<number> => {
+      if (inputs.length === 0) return 0;
+      const records = inputs.map((item, idx) => buildAthleteRecord(item, idx));
+
+      if (mode === 'firebase' && cloudArena && user) {
+        const chunkSize = 400;
+        for (let i = 0; i < records.length; i += chunkSize) {
+          const chunk = records.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          for (const ath of chunk) {
+            batch.set(doc(db, 'arenas', cloudArena.id, 'athletes', ath.id), {
+              id: ath.id,
+              arenaId: cloudArena.id,
+              ownerId: user.uid,
+              name: ath.name,
+              contingent: ath.contingent,
+              weightClass: ath.weightClass,
+              gender: ath.gender,
+              ageCategory: ath.ageCategory,
+              competitionCategory: ath.competitionCategory,
+              gelanggang: ath.gelanggang,
+              createdAt: serverTimestamp(),
+            });
+          }
+          try {
+            await batch.commit();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.WRITE, `arenas/${cloudArena.id}/athletes`);
+          }
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          athletes: [...(prev.athletes || []), ...records],
+        }));
+      }
+      return records.length;
+    },
+    [buildAthleteRecord, mode, cloudArena, user, commitLocalStore]
+  );
+
+  const deleteAthlete = useCallback(
+    async (athleteId: string) => {
+      if (mode === 'firebase' && cloudArena) {
+        const path = `arenas/${cloudArena.id}/athletes/${athleteId}`;
+        try {
+          await deleteDoc(doc(db, 'arenas', cloudArena.id, 'athletes', athleteId));
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, path);
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          athletes: (prev.athletes || []).filter((a) => a.id !== athleteId),
+        }));
+      }
+    },
+    [mode, cloudArena, commitLocalStore]
+  );
+
+  const clearAthletes = useCallback(async () => {
+    if (mode === 'firebase' && cloudArena) {
+      const chunkSize = 400;
+      for (let i = 0; i < athletes.length; i += chunkSize) {
+        const chunk = athletes.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        for (const ath of chunk) {
+          batch.delete(doc(db, 'arenas', cloudArena.id, 'athletes', ath.id));
+        }
+        try {
+          await batch.commit();
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `arenas/${cloudArena.id}/athletes`);
+        }
+      }
+    } else {
+      commitLocalStore((prev) => ({
+        ...prev,
+        athletes: [],
+      }));
+    }
+  }, [athletes, mode, cloudArena, commitLocalStore]);
+
+  const clearBracket = useCallback(
+    async (weightClass: string, gender: AthleteGender) => {
+      const toRemove = brackets.filter((b) => b.weightClass === weightClass && b.gender === gender);
+      if (mode === 'firebase' && cloudArena) {
+        const chunkSize = 400;
+        for (let i = 0; i < toRemove.length; i += chunkSize) {
+          const chunk = toRemove.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          for (const slot of chunk) {
+            batch.delete(doc(db, 'arenas', cloudArena.id, 'brackets', slot.id));
+          }
+          try {
+            await batch.commit();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.DELETE, `arenas/${cloudArena.id}/brackets`);
+          }
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          brackets: (prev.brackets || []).filter(
+            (b) => !(b.weightClass === weightClass && b.gender === gender)
+          ),
+        }));
+      }
+    },
+    [brackets, mode, cloudArena, commitLocalStore]
+  );
+
+  const generateBracket = useCallback(
+    async (
+      input: GenerateBracketInput
+    ): Promise<{ createdSlots: number; poolCount: number; error?: string }> => {
+      const pool = athletes.filter((a) => {
+        if (a.weightClass !== input.weightClass || a.gender !== input.gender) return false;
+        if (input.competitionCategory && (a.competitionCategory || 'Tanding') !== input.competitionCategory) {
+          return false;
+        }
+        if (
+          input.ageCategory &&
+          input.ageCategory !== 'Semua' &&
+          (a.ageCategory || 'Dewasa') !== input.ageCategory
+        ) {
+          return false;
+        }
+        if (
+          input.gelanggang &&
+          input.gelanggang !== 'Semua' &&
+          (a.gelanggang || 'A') !== input.gelanggang
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      if (pool.length < 2) {
+        return {
+          createdSlots: 0,
+          poolCount: 0,
+          error: 'Minimal 2 atlet terdaftar yang sesuai filter untuk membuat bagan bracket.',
+        };
+      }
+
+      const idPrefix = sanitizeId(`br-${Date.now().toString(36)}`);
+      const { slots: newSlots, poolCount } = buildTournamentBracketSlots(pool, {
+        arenaId: arena.id,
+        ownerId: user?.uid || arena.ownerId,
+        weightClass: input.weightClass,
+        gender: input.gender,
+        bracketMode: input.bracketMode,
+        poolSize: input.poolSize,
+        ageCategory: input.ageCategory,
+        competitionCategory: input.competitionCategory,
+        gelanggang: input.gelanggang,
+        idPrefix,
+      });
+
+      await clearBracket(input.weightClass, input.gender);
+
+      if (mode === 'firebase' && cloudArena && user) {
+        const chunkSize = 400;
+        for (let i = 0; i < newSlots.length; i += chunkSize) {
+          const chunk = newSlots.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          for (const slot of chunk) {
+            batch.set(doc(db, 'arenas', cloudArena.id, 'brackets', slot.id), {
+              ...slot,
+              arenaId: cloudArena.id,
+              ownerId: user.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          try {
+            await batch.commit();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.CREATE, `arenas/${cloudArena.id}/brackets`);
+          }
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          brackets: [
+            ...(prev.brackets || []).filter(
+              (b) => !(b.weightClass === input.weightClass && b.gender === input.gender)
+            ),
+            ...newSlots,
+          ],
+        }));
+      }
+
+      return { createdSlots: newSlots.length, poolCount };
+    },
+    [athletes, arena.id, arena.ownerId, clearBracket, mode, cloudArena, user, commitLocalStore]
+  );
+
+  const activateBracketMatch = useCallback(
+    async (slotId: string) => {
+      const slot = brackets.find((b) => b.id === slotId);
+      if (!slot) return;
+      if (
+        !slot.blueName ||
+        !slot.redName ||
+        slot.blueName === 'BYE' ||
+        slot.redName === 'BYE' ||
+        slot.blueName === 'Menunggu Pemenang' ||
+        slot.redName === 'Menunggu Pemenang'
+      ) {
+        return;
+      }
+
+      if (slot.matchId && matches.some((m) => m.id === slot.matchId)) {
+        await setActiveMatch(slot.matchId);
+        return;
+      }
+
+      const matchId = sanitizeId(`partai-${Date.now().toString(36)}`);
+      const nextNum = `Partai ${String(matches.length + 1).padStart(2, '0')}`;
+      const newMatch: MatchData = {
+        id: matchId,
+        arenaId: arena.id,
+        ownerId: user?.uid || arena.ownerId,
+        matchNumber: nextNum,
+        weightClass: `${slot.weightClass} (${slot.gender})`,
+        stage: slot.stage,
+        blueName: slot.blueName,
+        blueContingent: slot.blueContingent || '-',
+        redName: slot.redName,
+        redContingent: slot.redContingent || '-',
+        roundDurationSec: 120,
+        currentRound: 1,
+        status: 'waiting',
+        timerRemainingMs: 120000,
+        timerStartedAtMs: 0,
+        blueScore: 0,
+        redScore: 0,
+        bluePunches: 0,
+        blueKicks: 0,
+        blueFalls: 0,
+        blueBinaan: 0,
+        blueTeguran1: 0,
+        blueTeguran2: 0,
+        bluePeringatan: 0,
+        redPunches: 0,
+        redKicks: 0,
+        redFalls: 0,
+        redBinaan: 0,
+        redTeguran1: 0,
+        redTeguran2: 0,
+        redPeringatan: 0,
+        winner: '',
+        winMethod: '',
+      };
+
+      if (mode === 'firebase' && cloudArena && user) {
+        try {
+          await setDoc(doc(db, 'arenas', cloudArena.id, 'matches', matchId), {
+            ...newMatch,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          await updateDoc(doc(db, 'arenas', cloudArena.id), {
+            activeMatchId: matchId,
+            updatedAt: serverTimestamp(),
+          });
+          await updateDoc(doc(db, 'arenas', cloudArena.id, 'brackets', slot.id), {
+            matchId,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, `arenas/${cloudArena.id}/matches/${matchId}`);
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          arena: { ...prev.arena, activeMatchId: matchId },
+          matches: [...prev.matches, newMatch],
+          eventsByMatch: { ...prev.eventsByMatch, [matchId]: [] },
+          brackets: (prev.brackets || []).map((b) => (b.id === slot.id ? { ...b, matchId } : b)),
+        }));
+      }
+    },
+    [brackets, matches, arena.id, arena.ownerId, setActiveMatch, mode, cloudArena, user, commitLocalStore]
+  );
+
+  const advanceBracketWinner = useCallback(
+    async (slotId: string, winnerSide: Corner) => {
+      const slot = brackets.find((b) => b.id === slotId);
+      if (!slot) return;
+      const wName = winnerSide === 'blue' ? slot.blueName : slot.redName;
+      const wCont = winnerSide === 'blue' ? slot.blueContingent : slot.redContingent;
+      if (!wName || wName === 'BYE' || wName === 'Menunggu Pemenang') return;
+
+      const nextSlot = brackets.find(
+        (b) =>
+          b.weightClass === slot.weightClass &&
+          b.gender === slot.gender &&
+          (b.poolIndex ?? 0) === (slot.poolIndex ?? 0) &&
+          b.roundIndex === slot.roundIndex + 1 &&
+          b.slotIndex === Math.floor(slot.slotIndex / 2)
+      );
+
+      if (mode === 'firebase' && cloudArena) {
+        try {
+          await updateDoc(doc(db, 'arenas', cloudArena.id, 'brackets', slot.id), {
+            winnerSide,
+            winnerName: wName,
+            winnerContingent: wCont,
+            updatedAt: serverTimestamp(),
+          });
+          if (nextSlot) {
+            const nextPatch =
+              slot.slotIndex % 2 === 0
+                ? { blueName: wName, blueContingent: wCont, updatedAt: serverTimestamp() }
+                : { redName: wName, redContingent: wCont, updatedAt: serverTimestamp() };
+            await updateDoc(doc(db, 'arenas', cloudArena.id, 'brackets', nextSlot.id), nextPatch);
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `arenas/${cloudArena.id}/brackets/${slot.id}`);
+        }
+      } else {
+        commitLocalStore((prev) => ({
+          ...prev,
+          brackets: (prev.brackets || []).map((b) => {
+            if (b.id === slot.id) {
+              return { ...b, winnerSide, winnerName: wName, winnerContingent: wCont };
+            }
+            if (nextSlot && b.id === nextSlot.id) {
+              return slot.slotIndex % 2 === 0
+                ? { ...b, blueName: wName, blueContingent: wCont }
+                : { ...b, redName: wName, redContingent: wCont };
+            }
+            return b;
+          }),
+        }));
+      }
+    },
+    [brackets, mode, cloudArena, commitLocalStore]
+  );
+
   const value: ArenaContextValue = {
     mode,
     rtdbConnected,
@@ -1096,6 +1605,9 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     matches,
     activeMatch,
     events,
+    getMatchEvents,
+    athletes,
+    brackets,
     liveTimerMs,
     signInGoogle,
     signOutGoogle,
@@ -1107,6 +1619,14 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     setActiveMatch,
     deleteMatch,
     resetMatch,
+    addAthlete,
+    importAthletes,
+    deleteAthlete,
+    clearAthletes,
+    generateBracket,
+    activateBracketMatch,
+    advanceBracketWinner,
+    clearBracket,
     sendJudgeVote,
     clearJudgeVote,
     triggerDewanAction,

@@ -11,28 +11,38 @@ function getWinnerSummary(match: MatchData): string {
   return `${corner} — ${name} (${contingent})`;
 }
 
+function tryAddLogo(doc: jsPDF, dataUrl: string | undefined, x: number, y: number, size: number) {
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
+  try {
+    const format = dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('data:image/jpg') ? 'JPEG' : 'PNG';
+    doc.addImage(dataUrl, format, x, y, size, size);
+  } catch {
+    // ignore malformed image data
+  }
+}
+
 export function exportMatchPdf(arena: ArenaData, match: MatchData, events: MatchEvent[]): void {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Official Header
   doc.setFillColor(15, 23, 42);
-  doc.rect(0, 0, pageWidth, 30, 'F');
+  doc.rect(0, 0, pageWidth, 32, 'F');
+  tryAddLogo(doc, arena.logoLeft, 10, 5, 22);
+  tryAddLogo(doc, arena.logoRight, pageWidth - 32, 5, 22);
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text('BERITA ACARA PERTANDINGAN PENCAK SILAT', pageWidth / 2, 12, { align: 'center' });
+  doc.text('BERITA ACARA PERTANDINGAN PENCAK SILAT', pageWidth / 2, 11, { align: 'center' });
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
+  const subtitleParts = [arena.tournamentName];
+  if (arena.venue?.trim()) subtitleParts.push(arena.venue.trim());
+  if (arena.eventDate?.trim()) subtitleParts.push(arena.eventDate.trim());
+  doc.text(subtitleParts.join(' · '), pageWidth / 2, 18, { align: 'center' });
+  doc.setFontSize(8.5);
   doc.text(
-    `${arena.tournamentName} · ${arena.name} · Peraturan Pertandingan IPSI 2026 & PERSILAT`,
-    pageWidth / 2,
-    19,
-    { align: 'center' }
-  );
-  doc.setFontSize(9);
-  doc.text(
-    `Dicetak: ${new Date().toLocaleString('id-ID')}`,
+    `Peraturan Pertandingan IPSI 2026 & PERSILAT · Dicetak: ${new Date().toLocaleString('id-ID')}`,
     pageWidth / 2,
     25,
     { align: 'center' }
@@ -130,21 +140,33 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
   doc.save(safeFileName);
 }
 
-export function exportArenaSummaryPdf(arena: ArenaData, matches: MatchData[]): void {
+export function exportArenaSummaryPdf(
+  arena: ArenaData,
+  matches: MatchData[],
+  options?: { title?: string; fileNamePrefix?: string }
+): void {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
+  const reportTitle = options?.title || 'REKAPITULASI HASIL PERTANDINGAN';
+  const fileNamePrefix = options?.fileNamePrefix || 'Rekap';
 
   doc.setFillColor(15, 23, 42);
-  doc.rect(0, 0, pageWidth, 24, 'F');
+  doc.rect(0, 0, pageWidth, 26, 'F');
+  tryAddLogo(doc, arena.logoLeft, 10, 4, 18);
+  tryAddLogo(doc, arena.logoRight, pageWidth - 28, 4, 18);
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.text(`REKAPITULASI HASIL PERTANDINGAN — ${arena.tournamentName.toUpperCase()}`, pageWidth / 2, 11, {
+  doc.text(`${reportTitle} — ${arena.tournamentName.toUpperCase()}`, pageWidth / 2, 11, {
     align: 'center',
   });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`${arena.name} · Peraturan IPSI 2026 & PERSILAT · Dicetak ${new Date().toLocaleString('id-ID')}`, pageWidth / 2, 18, {
+  const subParts: string[] = [];
+  if (arena.venue?.trim()) subParts.push(arena.venue.trim());
+  if (arena.eventDate?.trim()) subParts.push(arena.eventDate.trim());
+  subParts.push('Peraturan IPSI 2026 & PERSILAT', `Dicetak ${new Date().toLocaleString('id-ID')}`);
+  doc.text(subParts.join(' · '), pageWidth / 2, 19, {
     align: 'center',
   });
 
@@ -165,6 +187,6 @@ export function exportArenaSummaryPdf(arena: ArenaData, matches: MatchData[]): v
     ]),
   });
 
-  const safeName = `Rekap_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+  const safeName = `${fileNamePrefix}_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
   doc.save(safeName);
 }

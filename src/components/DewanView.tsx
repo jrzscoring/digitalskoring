@@ -5,6 +5,7 @@ import type { AppView, Corner, WinMethod } from '../types/silat';
 import { determineOfficialWinner, formatMatchTime } from '../utils/ipsiRules';
 import { exportMatchPdf } from '../utils/pdfExport';
 import { ModuleHeader } from './ModuleHeader';
+import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface DewanViewProps {
   onNavigate: (view: AppView) => void;
@@ -174,6 +175,8 @@ export function DewanView({ onNavigate }: DewanViewProps) {
       <ModuleHeader currentView="dewan" onNavigate={onNavigate} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 space-y-5">
+        <TournamentIdentityBanner arena={arena} compact />
+
         {/* Top Match Status & Round Strip */}
         <section className="rounded-2xl bg-slate-900 border border-slate-800 px-5 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="text-center md:text-left">

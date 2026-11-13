@@ -8,6 +8,10 @@
         "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 80 },
         "tournamentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "venue": { "type": "string", "maxLength": 120 },
+        "eventDate": { "type": "string", "maxLength": 80 },
+        "logoLeft": { "type": "string", "maxLength": 250000 },
+        "logoRight": { "type": "string", "maxLength": 250000 },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "activeMatchId": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -99,6 +103,64 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "arenaId", "ownerId", "role", "createdAt"]
+    },
+    "Athlete": {
+      "title": "Athlete",
+      "description": "Data registrasi atlet peserta kejuaraan Pencak Silat.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "contingent": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "weightClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "gender": { "type": "string", "enum": ["Putra", "Putri"] },
+        "ageCategory": { "type": "string", "enum": ["Usia Dini 1", "Usia Dini 2", "Usia Dini", "Pra Remaja", "Remaja", "Dewasa", "Master"] },
+        "competitionCategory": { "type": "string", "enum": ["Tanding", "Jurus"] },
+        "gelanggang": { "type": "string", "enum": ["A", "B", "C", "D"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "arenaId", "ownerId", "name", "contingent", "weightClass", "gender",
+        "ageCategory", "competitionCategory", "gelanggang", "createdAt"
+      ]
+    },
+    "BracketSlot": {
+      "title": "BracketSlot",
+      "description": "Slot bagan bracket pertandingan eliminasi (Prestasi & Pemasalan) per kelas dan kategori.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "weightClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "gender": { "type": "string", "enum": ["Putra", "Putri"] },
+        "bracketMode": { "type": "string", "enum": ["prestasi", "pemasalan"] },
+        "poolSize": { "type": "integer" },
+        "poolIndex": { "type": "integer" },
+        "poolLabel": { "type": "string", "maxLength": 40 },
+        "ageCategory": { "type": "string", "maxLength": 32 },
+        "competitionCategory": { "type": "string", "maxLength": 24 },
+        "gelanggang": { "type": "string", "maxLength": 16 },
+        "roundIndex": { "type": "integer" },
+        "slotIndex": { "type": "integer" },
+        "stage": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "blueName": { "type": "string", "maxLength": 80 },
+        "blueContingent": { "type": "string", "maxLength": 80 },
+        "redName": { "type": "string", "maxLength": 80 },
+        "redContingent": { "type": "string", "maxLength": 80 },
+        "matchId": { "type": "string", "maxLength": 64 },
+        "winnerSide": { "type": "string", "enum": ["blue", "red", ""] },
+        "winnerName": { "type": "string", "maxLength": 80 },
+        "winnerContingent": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "arenaId", "ownerId", "weightClass", "gender", "roundIndex", "slotIndex",
+        "stage", "blueName", "blueContingent", "redName", "redContingent", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -109,6 +171,14 @@
     "/arenas/{arenaId}/operators/{operatorUid}": {
       "schema": { "$ref": "#/entities/ArenaOperator" },
       "description": "Daftar UID operator resmi pada gelanggang terkait."
+    },
+    "/arenas/{arenaId}/athletes/{athleteId}": {
+      "schema": { "$ref": "#/entities/Athlete" },
+      "description": "Daftar atlet yang diregistrasikan pada gelanggang."
+    },
+    "/arenas/{arenaId}/brackets/{slotId}": {
+      "schema": { "$ref": "#/entities/BracketSlot" },
+      "description": "Slot bagan bracket pertandingan eliminasi."
     },
     "/arenas/{arenaId}/matches/{matchId}": {
       "schema": { "$ref": "#/entities/Match" },

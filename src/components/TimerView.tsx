@@ -4,6 +4,7 @@ import type { AppView } from '../types/silat';
 import { formatMatchTime } from '../utils/ipsiRules';
 import { playArenaGong } from '../utils/soundEffects';
 import { ModuleHeader } from './ModuleHeader';
+import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface TimerViewProps {
   onNavigate: (view: AppView) => void;
@@ -18,7 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function TimerView({ onNavigate }: TimerViewProps) {
-  const { activeMatch, liveTimerMs, startTimer, pauseTimer, resetTimer, setRound, startBreakTimer } = useArena();
+  const { arena, activeMatch, liveTimerMs, startTimer, pauseTimer, resetTimer, setRound, startBreakTimer } = useArena();
 
   const isRunning = activeMatch.status === 'active' || activeMatch.status === 'break';
   const isFinished = activeMatch.status === 'finished';
@@ -28,6 +29,8 @@ export function TimerView({ onNavigate }: TimerViewProps) {
       <ModuleHeader currentView="timer" onNavigate={onNavigate} />
 
       <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 flex flex-col justify-center gap-6">
+        <TournamentIdentityBanner arena={arena} compact />
+
         {/* Match Identity */}
         <section className="text-center space-y-1">
           <div className="text-xs sm:text-sm text-slate-400">

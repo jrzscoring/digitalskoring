@@ -38,6 +38,10 @@ export interface ArenaData {
   id: string;
   name: string;
   tournamentName: string;
+  venue?: string;
+  eventDate?: string;
+  logoLeft?: string;
+  logoRight?: string;
   ownerId: string;
   activeMatchId: string;
   createdAt?: unknown;
@@ -81,6 +85,68 @@ export interface MatchData {
   judge3Vote?: JudgeVote;
   winner: Corner | 'draw' | '';
   winMethod: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AthleteGender = 'Putra' | 'Putri';
+
+export type AthleteAgeCategory =
+  | 'Usia Dini 1'
+  | 'Usia Dini 2'
+  | 'Usia Dini'
+  | 'Pra Remaja'
+  | 'Remaja'
+  | 'Dewasa'
+  | 'Master';
+
+export type CompetitionCategory = 'Tanding' | 'Jurus';
+
+export type ArenaCourt = 'A' | 'B' | 'C' | 'D';
+
+export interface AthleteData {
+  id: string;
+  arenaId: string;
+  ownerId: string;
+  name: string;
+  contingent: string;
+  weightClass: string;
+  gender: AthleteGender;
+  ageCategory?: AthleteAgeCategory;
+  competitionCategory?: CompetitionCategory;
+  gelanggang?: ArenaCourt;
+  createdAt?: unknown;
+  createdAtMs?: number;
+}
+
+export type BracketMode = 'prestasi' | 'pemasalan';
+
+export type PemasalanPoolSize = 2 | 4 | 6 | 8;
+
+export interface BracketMatchSlot {
+  id: string;
+  arenaId: string;
+  ownerId: string;
+  weightClass: string;
+  gender: AthleteGender;
+  bracketMode?: BracketMode;
+  poolSize?: number;
+  poolIndex?: number;
+  poolLabel?: string;
+  ageCategory?: string;
+  competitionCategory?: string;
+  gelanggang?: string;
+  roundIndex: number;
+  slotIndex: number;
+  stage: string;
+  blueName: string;
+  blueContingent: string;
+  redName: string;
+  redContingent: string;
+  matchId?: string;
+  winnerSide?: Corner | '';
+  winnerName?: string;
+  winnerContingent?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

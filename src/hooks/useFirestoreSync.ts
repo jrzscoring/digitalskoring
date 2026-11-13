@@ -14,12 +14,14 @@ import {
   where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from '../lib/firebase';
-import type { ArenaData, MatchData, MatchEvent } from '../types/silat';
+import type { ArenaData, AthleteData, BracketMatchSlot, MatchData, MatchEvent } from '../types/silat';
 
 export interface LocalStorePayload {
   arena: ArenaData;
   matches: MatchData[];
   eventsByMatch: Record<string, MatchEvent[]>;
+  athletes?: AthleteData[];
+  brackets?: BracketMatchSlot[];
 }
 
 export function sanitizeId(raw: string): string {
@@ -56,10 +58,26 @@ export function normalizeRtdbPayload(raw: unknown): LocalStorePayload | null {
     }
   }
 
+  const rawAthletes = data.athletes;
+  const athletesArray: AthleteData[] = Array.isArray(rawAthletes)
+    ? rawAthletes.filter(Boolean)
+    : rawAthletes && typeof rawAthletes === 'object'
+    ? Object.values(rawAthletes as Record<string, AthleteData>).filter(Boolean)
+    : [];
+
+  const rawBrackets = data.brackets;
+  const bracketsArray: BracketMatchSlot[] = Array.isArray(rawBrackets)
+    ? rawBrackets.filter(Boolean)
+    : rawBrackets && typeof rawBrackets === 'object'
+    ? Object.values(rawBrackets as Record<string, BracketMatchSlot>).filter(Boolean)
+    : [];
+
   return {
     arena: data.arena,
     matches: matchesArray,
     eventsByMatch,
+    athletes: athletesArray,
+    brackets: bracketsArray,
   };
 }
 
@@ -85,6 +103,8 @@ export function useFirestoreSync({
   const [cloudArena, setCloudArena] = useState<ArenaData | null>(null);
   const [cloudMatches, setCloudMatches] = useState<MatchData[]>([]);
   const [cloudEvents, setCloudEvents] = useState<MatchEvent[]>([]);
+  const [cloudAthletes, setCloudAthletes] = useState<AthleteData[]>([]);
+  const [cloudBrackets, setCloudBrackets] = useState<BracketMatchSlot[]>([]);
   const [rtdbConnected, setRtdbConnected] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 
@@ -138,6 +158,8 @@ export function useFirestoreSync({
       setCloudArena(null);
       setCloudMatches([]);
       setCloudEvents([]);
+      setCloudAthletes([]);
+      setCloudBrackets([]);
       return;
     }
 
@@ -146,6 +168,8 @@ export function useFirestoreSync({
 
     let unsubArena: (() => void) | null = null;
     let unsubMatches: (() => void) | null = null;
+    let unsubAthletes: (() => void) | null = null;
+    let unsubBrackets: (() => void) | null = null;
 
     const initAndSubscribe = async () => {
       try {
@@ -156,6 +180,10 @@ export function useFirestoreSync({
             id: targetArenaId,
             name: 'Gelanggang A',
             tournamentName: 'Kejuaraan Nasional Pencak Silat IPSI 2026',
+            venue: '',
+            eventDate: '',
+            logoLeft: '',
+            logoRight: '',
             ownerId: user.uid,
             activeMatchId: initialMatchId,
             createdAt: serverTimestamp(),
@@ -229,6 +257,34 @@ export function useFirestoreSync({
             console.warn('Matches list listener fallback:', err.message);
           }
         );
+
+        const athletesQuery = query(
+          collection(db, 'arenas', targetArenaId, 'athletes'),
+          where('ownerId', '==', user.uid)
+        );
+        unsubAthletes = onSnapshot(
+          athletesQuery,
+          (querySnap) => {
+            setCloudAthletes(querySnap.docs.map((d) => d.data() as AthleteData));
+          },
+          (err) => {
+            console.warn('Athletes listener fallback:', err.message);
+          }
+        );
+
+        const bracketsQuery = query(
+          collection(db, 'arenas', targetArenaId, 'brackets'),
+          where('ownerId', '==', user.uid)
+        );
+        unsubBrackets = onSnapshot(
+          bracketsQuery,
+          (querySnap) => {
+            setCloudBrackets(querySnap.docs.map((d) => d.data() as BracketMatchSlot));
+          },
+          (err) => {
+            console.warn('Brackets listener fallback:', err.message);
+          }
+        );
       } catch (err) {
         setSyncError(err instanceof Error ? err.message : 'Gagal terhubung ke Firebase.');
       }
@@ -239,6 +295,8 @@ export function useFirestoreSync({
     return () => {
       unsubArena?.();
       unsubMatches?.();
+      unsubAthletes?.();
+      unsubBrackets?.();
     };
   }, [authReady, user, joinedArenaId]);
 
@@ -287,6 +345,8 @@ export function useFirestoreSync({
     cloudArena,
     cloudMatches,
     cloudEvents,
+    cloudAthletes,
+    cloudBrackets,
     rtdbConnected,
     syncError,
     setSyncError,

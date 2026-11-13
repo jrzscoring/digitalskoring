@@ -1,8 +1,9 @@
 import { ArrowLeft, Award, Maximize2, Minimize2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useArena } from '../context/ArenaContext';
 import type { AppView, JudgeId } from '../types/silat';
 import { CONSENSUS_WINDOW_MS, formatMatchTime } from '../utils/ipsiRules';
+import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface ScoreboardViewProps {
   onNavigate: (view: AppView) => void;
@@ -12,14 +13,20 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
   const { arena, activeMatch, liveTimerMs } = useArena();
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
   const toggleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
-        setIsFullscreen(true);
       } else {
         await document.exitFullscreen();
-        setIsFullscreen(false);
       }
     } catch {
       // ignore fullscreen denial in headless/sandbox environments
@@ -42,45 +49,33 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
 
   return (
     <div className="min-h-screen w-full bg-slate-950 text-white flex flex-col justify-between overflow-hidden select-none relative">
-      {/* Subtle Projector Controls (Top-Right) */}
-      <div className="absolute top-3 right-3 z-40 flex items-center gap-2 opacity-60 hover:opacity-100 transition-opacity">
+      {/* Kembali & Full Screen Controls */}
+      <div className="px-4 sm:px-6 pt-3 flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={() => onNavigate('landing')}
           aria-label="Kembali ke Menu Utama"
-          className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900/90 border border-slate-700 text-xs font-semibold text-slate-200 flex items-center gap-1.5 cursor-pointer"
+          className="min-h-[40px] px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-2 cursor-pointer"
         >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Menu</span>
+          <ArrowLeft className="w-4 h-4" />
+          <span>Kembali</span>
         </button>
         <button
           type="button"
           onClick={() => void toggleFullscreen()}
-          aria-label="Layar Penuh Proyektor"
-          className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg bg-slate-900/90 border border-slate-700 text-slate-200 cursor-pointer"
+          aria-label={isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}
+          className="min-h-[40px] px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-2 cursor-pointer"
         >
           {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          <span>{isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}</span>
         </button>
       </div>
 
-      {/* Top Tournament & Arena Banner */}
-      <header className="px-6 py-4 bg-slate-900/90 border-b border-slate-800 flex flex-col items-center justify-center text-center gap-1">
-        <div className="font-display text-lg sm:text-2xl font-bold tracking-wider uppercase text-amber-400">
-          {arena.tournamentName}
-        </div>
-        <div className="text-xs sm:text-sm text-slate-300 font-medium flex flex-wrap items-center justify-center gap-2">
-          <span>{arena.name}</span>
-          <span aria-hidden="true">&middot;</span>
-          <span className="font-bold text-white">{activeMatch.matchNumber}</span>
-          <span aria-hidden="true">&middot;</span>
-          <span>{activeMatch.stage}</span>
-          <span aria-hidden="true">&middot;</span>
-          <span>{activeMatch.weightClass}</span>
-        </div>
-      </header>
-
       {/* Main Arena Split-Screen Scoreboard */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 items-stretch gap-3 sm:gap-4 p-3 sm:p-6">
+      <main className="flex-1 flex flex-col gap-3 sm:gap-4 p-3 sm:p-6">
+        <TournamentIdentityBanner arena={arena} match={activeMatch} />
+
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 items-stretch gap-3 sm:gap-4">
         {/* Sudut Biru */}
         <section className="lg:col-span-5 rounded-3xl bg-gradient-to-b from-blue-800 to-blue-950 border-2 border-blue-500/60 p-5 sm:p-7 flex flex-col justify-between shadow-2xl">
           <div className="space-y-1">
@@ -229,6 +224,7 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
             </div>
           </div>
         </section>
+        </div>
       </main>
 
       {/* Bottom Judge Consensus Indicator Lamps */}

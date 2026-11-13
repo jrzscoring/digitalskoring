@@ -4,13 +4,14 @@ import { useArena } from '../context/ArenaContext';
 import type { AppView, Corner, JudgeId } from '../types/silat';
 import { CONSENSUS_WINDOW_MS, formatMatchTime } from '../utils/ipsiRules';
 import { ModuleHeader } from './ModuleHeader';
+import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface JuriViewProps {
   onNavigate: (view: AppView) => void;
 }
 
 export function JuriView({ onNavigate }: JuriViewProps) {
-  const { activeMatch, liveTimerMs, sendJudgeVote, clearJudgeVote } = useArena();
+  const { arena, activeMatch, liveTimerMs, sendJudgeVote, clearJudgeVote } = useArena();
   const [judgeId, setJudgeId] = useState<JudgeId>(() => {
     try {
       const saved = sessionStorage.getItem('silat_selected_judge');
@@ -82,6 +83,8 @@ export function JuriView({ onNavigate }: JuriViewProps) {
       <ModuleHeader currentView="juri" onNavigate={onNavigate} />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col gap-4 justify-between">
+        <TournamentIdentityBanner arena={arena} compact />
+
         {/* Top Judge Identity & Match Clock Strip */}
         <section className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 w-full sm:w-auto">

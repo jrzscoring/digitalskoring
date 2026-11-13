@@ -58,10 +58,17 @@ service cloud.firestore {
     // --- Validation Blueprints ---
     function isValidArena(data) {
       return data.keys().hasAll(['id', 'name', 'tournamentName', 'ownerId', 'activeMatchId', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'tournamentName', 'ownerId', 'activeMatchId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'name', 'tournamentName', 'venue', 'eventDate', 'logoLeft', 'logoRight',
+          'ownerId', 'activeMatchId', 'createdAt', 'updatedAt'
+        ])
         && isValidId(data.id)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
         && data.tournamentName is string && data.tournamentName.size() >= 1 && data.tournamentName.size() <= 120
+        && (!('venue' in data) || (data.venue is string && data.venue.size() <= 120))
+        && (!('eventDate' in data) || (data.eventDate is string && data.eventDate.size() <= 80))
+        && (!('logoLeft' in data) || (data.logoLeft is string && data.logoLeft.size() <= 250000))
+        && (!('logoRight' in data) || (data.logoRight is string && data.logoRight.size() <= 250000))
         && isValidUid(data.ownerId)
         && data.activeMatchId is string && data.activeMatchId.size() <= 64
         && data.createdAt is timestamp
@@ -172,6 +179,68 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidAthlete(data) {
+      return data.keys().hasAll([
+          'id', 'arenaId', 'ownerId', 'name', 'contingent', 'weightClass', 'gender',
+          'ageCategory', 'competitionCategory', 'gelanggang', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'arenaId', 'ownerId', 'name', 'contingent', 'weightClass', 'gender',
+          'ageCategory', 'competitionCategory', 'gelanggang', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.arenaId)
+        && isValidUid(data.ownerId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.contingent is string && data.contingent.size() >= 1 && data.contingent.size() <= 80
+        && data.weightClass is string && data.weightClass.size() >= 1 && data.weightClass.size() <= 80
+        && data.gender in ['Putra', 'Putri']
+        && data.ageCategory in ['Usia Dini 1', 'Usia Dini 2', 'Usia Dini', 'Pra Remaja', 'Remaja', 'Dewasa', 'Master']
+        && data.competitionCategory in ['Tanding', 'Jurus']
+        && data.gelanggang in ['A', 'B', 'C', 'D']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBracketSlot(data) {
+      return data.keys().hasAll([
+          'id', 'arenaId', 'ownerId', 'weightClass', 'gender', 'roundIndex', 'slotIndex',
+          'stage', 'blueName', 'blueContingent', 'redName', 'redContingent', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'arenaId', 'ownerId', 'weightClass', 'gender',
+          'bracketMode', 'poolSize', 'poolIndex', 'poolLabel',
+          'ageCategory', 'competitionCategory', 'gelanggang',
+          'roundIndex', 'slotIndex',
+          'stage', 'blueName', 'blueContingent', 'redName', 'redContingent',
+          'matchId', 'winnerSide', 'winnerName', 'winnerContingent', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.arenaId)
+        && isValidUid(data.ownerId)
+        && data.weightClass is string && data.weightClass.size() >= 1 && data.weightClass.size() <= 80
+        && data.gender in ['Putra', 'Putri']
+        && (!('bracketMode' in data) || data.bracketMode in ['prestasi', 'pemasalan'])
+        && (!('poolSize' in data) || (data.poolSize is int && data.poolSize >= 0 && data.poolSize <= 64))
+        && (!('poolIndex' in data) || (data.poolIndex is int && data.poolIndex >= 0 && data.poolIndex <= 128))
+        && (!('poolLabel' in data) || (data.poolLabel is string && data.poolLabel.size() <= 40))
+        && (!('ageCategory' in data) || (data.ageCategory is string && data.ageCategory.size() <= 32))
+        && (!('competitionCategory' in data) || (data.competitionCategory is string && data.competitionCategory.size() <= 24))
+        && (!('gelanggang' in data) || (data.gelanggang is string && data.gelanggang.size() <= 16))
+        && data.roundIndex is int && data.roundIndex >= 0 && data.roundIndex <= 8
+        && data.slotIndex is int && data.slotIndex >= 0 && data.slotIndex <= 64
+        && data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 40
+        && data.blueName is string && data.blueName.size() <= 80
+        && data.blueContingent is string && data.blueContingent.size() <= 80
+        && data.redName is string && data.redName.size() <= 80
+        && data.redContingent is string && data.redContingent.size() <= 80
+        && (!('matchId' in data) || (data.matchId is string && data.matchId.size() <= 64))
+        && (!('winnerSide' in data) || data.winnerSide in ['blue', 'red', ''])
+        && (!('winnerName' in data) || (data.winnerName is string && data.winnerName.size() <= 80))
+        && (!('winnerContingent' in data) || (data.winnerContingent is string && data.winnerContingent.size() <= 80))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
     match /admins/{adminUid} {
       allow get: if isVerifiedUser() && request.auth.uid == adminUid;
@@ -199,7 +268,9 @@ service cloud.firestore {
         && (existing().ownerId == request.auth.uid || isAdmin())
         && (
           isAdmin() ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tournamentName', 'activeMatchId', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'tournamentName', 'venue', 'eventDate', 'logoLeft', 'logoRight', 'activeMatchId', 'updatedAt'
+          ])
         );
       allow delete: if isValidId(arenaId) && isVerifiedUser() && (
         existing().ownerId == request.auth.uid || isAdmin()
@@ -220,6 +291,56 @@ service cloud.firestore {
           && isArenaOwner(arenaId)
           && incoming().ownerId == arenaDoc(arenaId).data.ownerId;
         allow delete: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser() && (
+          isArenaOwner(arenaId) || isAdmin()
+        );
+      }
+
+      match /athletes/{athleteId} {
+        allow get: if isValidId(arenaId) && isValidId(athleteId) && canAccessArena(arenaId);
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidId(arenaId) && isValidId(athleteId) && isVerifiedUser()
+          && isValidAthlete(incoming())
+          && incoming().id == athleteId
+          && incoming().arenaId == arenaId
+          && incoming().createdAt == request.time
+          && isArenaOwner(arenaId)
+          && incoming().ownerId == request.auth.uid;
+        allow delete: if isValidId(arenaId) && isValidId(athleteId) && isVerifiedUser() && (
+          isArenaOwner(arenaId) || isAdmin()
+        );
+      }
+
+      match /brackets/{slotId} {
+        allow get: if isValidId(arenaId) && isValidId(slotId) && canAccessArena(arenaId);
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidId(arenaId) && isValidId(slotId) && isVerifiedUser()
+          && isValidBracketSlot(incoming())
+          && incoming().id == slotId
+          && incoming().arenaId == arenaId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isArenaOwner(arenaId)
+          && incoming().ownerId == request.auth.uid;
+        allow update: if isValidId(arenaId) && isValidId(slotId) && isVerifiedUser()
+          && isValidBracketSlot(incoming())
+          && incoming().id == existing().id
+          && incoming().arenaId == existing().arenaId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && canAccessArena(arenaId)
+          && (
+            isAdmin() ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'blueName', 'blueContingent', 'redName', 'redContingent',
+              'matchId', 'winnerSide', 'winnerName', 'winnerContingent', 'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(arenaId) && isValidId(slotId) && isVerifiedUser() && (
           isArenaOwner(arenaId) || isAdmin()
         );
       }
