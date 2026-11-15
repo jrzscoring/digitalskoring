@@ -2,11 +2,14 @@ import * as XLSX from 'xlsx';
 import type { AddAthleteInput } from '../context/ArenaContext';
 import type {
   ArenaCourt,
+  ArenaData,
   AthleteAgeCategory,
   AthleteData,
   AthleteGender,
   CompetitionCategory,
+  MatchData,
 } from '../types/silat';
+import { formatMatchScore, getJurusType, isJurusMatch } from './ipsiRules';
 
 export const AGE_CATEGORIES: AthleteAgeCategory[] = [
   'Usia Dini 1',
@@ -425,3 +428,70 @@ export async function parseAthletesExcel(
 
   return { athletes: parsed, skipped };
 }
+
+function formatExcelMatchStatus(status: MatchData['status']): string {
+  switch (status) {
+    case 'waiting':
+      return 'Menunggu';
+    case 'active':
+      return 'Berjalan';
+    case 'paused':
+      return 'Dijeda';
+    case 'break':
+      return 'Istirahat';
+    case 'finished':
+      return 'Selesai';
+  }
+}
+
+export function exportMatchScheduleExcel(matches: MatchData[], arena?: ArenaData): void {
+  const wb = XLSX.utils.book_new();
+
+  const rows = matches.map((m, idx) => ({
+    No: idx + 1,
+    Partai: m.matchNumber,
+    'Babak / Fase': m.stage,
+    'Kelas / Kategori': m.weightClass,
+    'Pesilat Biru': m.blueName,
+    'Kontingen Biru': m.blueContingent,
+    'Pesilat Merah': m.redName,
+    'Kontingen Merah': m.redContingent,
+    'Jumlah Babak': isJurusMatch(m) ? `Jurus ${getJurusType(m)}` : `${m.totalRounds ?? 3} Babak`,
+    Status: formatExcelMatchStatus(m.status),
+    'Skor Biru': formatMatchScore(m, 'blue'),
+    'Skor Merah': formatMatchScore(m, 'red'),
+    Pemenang:
+      m.winner === 'blue'
+        ? `Biru (${m.blueName})`
+        : m.winner === 'red'
+        ? `Merah (${m.redName})`
+        : m.winner === 'draw'
+        ? 'Seri'
+        : '-',
+    'Metode Kemenangan': m.winMethod || '-',
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 6 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 26 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 11 },
+    { wch: 11 },
+    { wch: 24 },
+    { wch: 22 },
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Jadwal Pertandingan');
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const arenaSlug = arena?.name ? arena.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Gelanggang';
+  XLSX.writeFile(wb, `jadwal-pertandingan-${arenaSlug}-${dateStamp}.xlsx`);
+}
+

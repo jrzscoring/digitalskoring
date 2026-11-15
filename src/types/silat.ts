@@ -19,12 +19,16 @@ export type WinMethod =
 
 export type DewanActionType =
   | 'fall'
+  | 'cancel_fall'
   | 'binaan'
+  | 'binaan1'
+  | 'binaan2'
   | 'teguran1'
   | 'teguran2'
   | 'peringatan1'
   | 'peringatan2'
-  | 'peringatan3';
+  | 'peringatan3'
+  | 'disq';
 
 export interface JudgeVote {
   corner: Corner | 'none';
@@ -48,6 +52,54 @@ export interface ArenaData {
   updatedAt?: unknown;
 }
 
+export type JurusCategory = 'Tunggal Baku' | 'Ganda' | 'Regu' | 'Tunggal Bebas';
+
+export interface JurusJudgeCornerScore {
+  wrongMoves: number; // Tunggal Baku / Regu: jumlah kesalahan gerak (-0.01 per tap dari 9.90)
+  staminaScore: number; // Tunggal Baku / Regu: kemantapan/stamina dalam perseratus (0..10 => 0.00..0.10)
+  attackScore: number; // Ganda / Tunggal Bebas: teknik serang bela dalam perseratus (0..30 => 0.00..0.30)
+  harmonyScore: number; // Ganda / Tunggal Bebas: kemantapan/kekompakan/kreativitas dalam perseratus (0..30 => 0.00..0.30)
+  soulScore: number; // Ganda / Tunggal Bebas: penghayatan/jiwa/stamina dalam perseratus (0..30 => 0.00..0.30)
+  submitted: boolean;
+}
+
+export interface JurusCornerPenalties {
+  timeViolation: number; // Pelanggaran batas waktu tampil (-0.50)
+  outOfBounds: number; // Keluar gelanggang (-0.50)
+  weaponDrop: number; // Senjata jatuh / tidak sesuai (-0.50)
+  attireViolation: number; // Pakaian / aksesoris jatuh (-0.50)
+  stopOrDelay: number; // Berhenti / mengulang / terlambat >5 dtk (-0.50)
+}
+
+export type JurusPenaltyType = keyof JurusCornerPenalties;
+
+export interface JurusCornerData {
+  judge1: JurusJudgeCornerScore;
+  judge2: JurusJudgeCornerScore;
+  judge3: JurusJudgeCornerScore;
+  penalties: JurusCornerPenalties;
+  recordedElapsedMs: number;
+  completed: boolean;
+}
+
+export interface JurusMatchState {
+  blue: JurusCornerData;
+  red: JurusCornerData;
+}
+
+export type VerificationKind = 'jatuhan' | 'pelanggaran';
+export type VerificationVoteChoice = 'blue' | 'red' | 'invalid';
+export type VerificationVoteValue = VerificationVoteChoice | 'none';
+
+export interface VerificationState {
+  active: boolean;
+  kind: VerificationKind;
+  requestedAtMs: number;
+  j1Vote: VerificationVoteValue;
+  j2Vote: VerificationVoteValue;
+  j3Vote: VerificationVoteValue;
+}
+
 export interface MatchData {
   id: string;
   arenaId: string;
@@ -55,12 +107,17 @@ export interface MatchData {
   matchNumber: string;
   weightClass: string;
   stage: string;
+  competitionCategory?: CompetitionCategory;
+  jurusType?: JurusCategory;
+  activePerformerCorner?: Corner;
+  jurusState?: JurusMatchState;
   blueName: string;
   blueContingent: string;
   redName: string;
   redContingent: string;
   roundDurationSec: number;
   currentRound: number;
+  totalRounds?: 1 | 2 | 3;
   status: MatchStatus;
   timerRemainingMs: number;
   timerStartedAtMs: number;
@@ -83,8 +140,10 @@ export interface MatchData {
   judge1Vote?: JudgeVote;
   judge2Vote?: JudgeVote;
   judge3Vote?: JudgeVote;
+  verification?: VerificationState;
   winner: Corner | 'draw' | '';
   winMethod: string;
+  finishedAtMs?: number;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

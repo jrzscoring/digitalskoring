@@ -31,14 +31,18 @@ export function ModuleHeader({ onNavigate }: ModuleHeaderProps) {
   };
 
   return (
-    <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 pt-3 flex items-center justify-between gap-3">
+    <div
+      className={`w-full mx-auto flex items-center justify-between gap-3 ${
+        isFullscreen ? 'max-w-none px-2.5 pt-2' : 'max-w-7xl px-4 sm:px-6 pt-3'
+      }`}
+    >
       <button
         type="button"
         onClick={() => onNavigate('landing')}
         aria-label="Kembali ke Menu Utama"
-        className="min-h-[40px] px-3.5 py-2 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+        className="min-h-[40px] px-3.5 py-2 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
       >
-        <ArrowLeft className="w-4 h-4" />
+        <ArrowLeft className="w-4 h-4 text-yellow-300" />
         <span>Kembali</span>
       </button>
 
@@ -46,9 +50,13 @@ export function ModuleHeader({ onNavigate }: ModuleHeaderProps) {
         type="button"
         onClick={() => void toggleFullscreen()}
         aria-label={isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}
-        className="min-h-[40px] px-3.5 py-2 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+        className="min-h-[40px] px-3.5 py-2 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
       >
-        {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+        {isFullscreen ? (
+          <Minimize2 className="w-4 h-4 text-yellow-300" />
+        ) : (
+          <Maximize2 className="w-4 h-4 text-yellow-300" />
+        )}
         <span>{isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}</span>
       </button>
     </div>

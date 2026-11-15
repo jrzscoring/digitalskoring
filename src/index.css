@@ -10,9 +10,19 @@
   html, body {
     font-family: var(--font-sans);
     touch-action: manipulation;
+    background-color: #05020a;
+    background-image: linear-gradient(135deg, #000000 0%, #17092e 52%, #3b0764 100%);
+    background-attachment: fixed;
+    color: #ffffff;
   }
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+:fullscreen main {
+  max-width: none !important;
+  padding: 0.375rem 0.625rem !important;
+}
+

@@ -1,6 +1,16 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { ArenaData, MatchData, MatchEvent } from '../types/silat';
+import type { ArenaData, AthleteData, MatchData, MatchEvent } from '../types/silat';
+import {
+  computeCornerJurusSummary,
+  ensureJurusState,
+  formatJurusElapsedMs,
+  formatJurusScore,
+  formatMatchScore,
+  getJurusType,
+  isJurusMatch,
+} from './ipsiRules';
+import type { MedalAwardEntry, MedalStandingRow } from './medalStandings';
 
 function getWinnerSummary(match: MatchData): string {
   if (!match.winner) return 'Belum Disahkan';
@@ -48,6 +58,12 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
     { align: 'center' }
   );
 
+  const isJurus = isJurusMatch(match);
+  const jurusType = getJurusType(match);
+  const jState = ensureJurusState(match);
+  const blueJurus = computeCornerJurusSummary(jurusType, jState.blue);
+  const redJurus = computeCornerJurusSummary(jurusType, jState.red);
+
   // Match Identity Table
   doc.setTextColor(15, 23, 42);
   autoTable(doc, {
@@ -55,7 +71,7 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
     theme: 'grid',
     styles: { fontSize: 9, cellPadding: 2.5 },
     headStyles: { fillColor: [30, 41, 59], textColor: 255 },
-    head: [['Nomor Partai', 'Babak / Fase', 'Kelas Tanding', 'Status Pertandingan']],
+    head: [['Nomor Partai', 'Babak / Fase', isJurus ? 'Kategori Jurus TGRS' : 'Kelas Tanding', 'Status Pertandingan']],
     body: [[match.matchNumber, match.stage, match.weightClass, match.status.toUpperCase()]],
   });
 
@@ -72,17 +88,29 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
       2: { fillColor: [254, 242, 242], textColor: [185, 28, 28], fontStyle: 'bold' },
     },
     head: [['Rincian Penilaian', `SUDUT BIRU (${match.blueName})`, `SUDUT MERAH (${match.redName})`]],
-    body: [
-      ['Kontingen / Daerah', match.blueContingent, match.redContingent],
-      ['Pukulan (+1)', String(match.bluePunches), String(match.redPunches)],
-      ['Tendangan (+2)', String(match.blueKicks), String(match.redKicks)],
-      ['Jatuhan Wasit (+3)', String(match.blueFalls), String(match.redFalls)],
-      ['Binaan (0)', String(match.blueBinaan), String(match.redBinaan)],
-      ['Teguran I (-1)', String(match.blueTeguran1), String(match.redTeguran1)],
-      ['Teguran II (-2)', String(match.blueTeguran2), String(match.redTeguran2)],
-      ['Peringatan (-5 / -10 / DQ)', String(match.bluePeringatan), String(match.redPeringatan)],
-      ['TOTAL SKOR AKHIR', String(match.blueScore), String(match.redScore)],
-    ],
+    body: isJurus
+      ? [
+          ['Kontingen / Daerah', match.blueContingent, match.redContingent],
+          ['Nilai Juri 1', formatJurusScore(blueJurus.judgeTotals[0]), formatJurusScore(redJurus.judgeTotals[0])],
+          ['Nilai Juri 2', formatJurusScore(blueJurus.judgeTotals[1]), formatJurusScore(redJurus.judgeTotals[1])],
+          ['Nilai Juri 3', formatJurusScore(blueJurus.judgeTotals[2]), formatJurusScore(redJurus.judgeTotals[2])],
+          ['Median Juri', formatJurusScore(blueJurus.median), formatJurusScore(redJurus.median)],
+          ['Potongan Dewan', `-${formatJurusScore(blueJurus.penaltyTotal)}`, `-${formatJurusScore(redJurus.penaltyTotal)}`],
+          ['Standar Deviasi', (blueJurus.stdDev / 100).toFixed(3), (redJurus.stdDev / 100).toFixed(3)],
+          ['Waktu Tampil', formatJurusElapsedMs(jState.blue.recordedElapsedMs), formatJurusElapsedMs(jState.red.recordedElapsedMs)],
+          ['TOTAL NILAI AKHIR', formatMatchScore(match, 'blue'), formatMatchScore(match, 'red')],
+        ]
+      : [
+          ['Kontingen / Daerah', match.blueContingent, match.redContingent],
+          ['Pukulan (+1)', String(match.bluePunches), String(match.redPunches)],
+          ['Tendangan (+2)', String(match.blueKicks), String(match.redKicks)],
+          ['Jatuhan Wasit (+3)', String(match.blueFalls), String(match.redFalls)],
+          ['Binaan (0)', String(match.blueBinaan), String(match.redBinaan)],
+          ['Teguran I (-1)', String(match.blueTeguran1), String(match.redTeguran1)],
+          ['Teguran II (-2)', String(match.blueTeguran2), String(match.redTeguran2)],
+          ['Peringatan (-5 / -10 / DQ)', String(match.bluePeringatan), String(match.redPeringatan)],
+          ['TOTAL SKOR AKHIR', String(match.blueScore), String(match.redScore)],
+        ],
   });
 
   // Official Decision Box
@@ -96,8 +124,8 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
     body: [[getWinnerSummary(match), match.winMethod || '-']],
   });
 
-  // Event Chronology (Last 20 active events)
-  const validEvents = events.filter((e) => !e.undone).slice(0, 20);
+  // Event Chronology (Last 20 active official events)
+  const validEvents = events.filter((e) => !e.undone && e.type !== 'judge_press').slice(0, 20);
   if (validEvents.length > 0) {
     const afterDecisionY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
     autoTable(doc, {
@@ -107,12 +135,18 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
       headStyles: { fillColor: [51, 65, 85], textColor: 255 },
       head: [['Babak', 'Waktu', 'Petugas', 'Sudut', 'Keterangan', 'Poin']],
       body: validEvents.map((ev) => [
-        `Babak ${ev.round}`,
+        isJurus ? 'TGRS' : `Babak ${ev.round}`,
         ev.matchTimeFormatted,
         ev.actorRole,
         ev.corner === 'blue' ? 'Biru' : ev.corner === 'red' ? 'Merah' : 'Netral',
         ev.description,
-        ev.pointsDelta > 0 ? `+${ev.pointsDelta}` : String(ev.pointsDelta),
+        ev.type.startsWith('jurus_')
+          ? ev.pointsDelta === 0
+            ? '-'
+            : `${ev.pointsDelta > 0 ? '+' : '-'}${formatJurusScore(Math.abs(ev.pointsDelta))}`
+          : ev.pointsDelta > 0
+          ? `+${ev.pointsDelta}`
+          : String(ev.pointsDelta),
       ]),
     });
   }
@@ -181,7 +215,7 @@ export function exportArenaSummaryPdf(
       m.weightClass,
       `${m.blueName}\n(${m.blueContingent})`,
       `${m.redName}\n(${m.redContingent})`,
-      `${m.blueScore} - ${m.redScore}`,
+      `${formatMatchScore(m, 'blue')} - ${formatMatchScore(m, 'red')}`,
       m.winner === 'blue' ? `BIRU: ${m.blueName}` : m.winner === 'red' ? `MERAH: ${m.redName}` : m.winner === 'draw' ? 'Seri' : '-',
       m.winMethod || '-',
     ]),
@@ -190,3 +224,185 @@ export function exportArenaSummaryPdf(
   const safeName = `${fileNamePrefix}_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
   doc.save(safeName);
 }
+
+function drawLandscapeReportHeader(doc: jsPDF, arena: ArenaData, title: string): void {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, 26, 'F');
+  tryAddLogo(doc, arena.logoLeft, 10, 4, 18);
+  tryAddLogo(doc, arena.logoRight, pageWidth - 28, 4, 18);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(`${title} — ${arena.tournamentName.toUpperCase()}`, pageWidth / 2, 11, {
+    align: 'center',
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const subParts: string[] = [];
+  if (arena.venue?.trim()) subParts.push(arena.venue.trim());
+  if (arena.eventDate?.trim()) subParts.push(arena.eventDate.trim());
+  subParts.push('Peraturan IPSI 2026 & PERSILAT', `Dicetak ${new Date().toLocaleString('id-ID')}`);
+  doc.text(subParts.join(' · '), pageWidth / 2, 19, {
+    align: 'center',
+  });
+}
+
+export function exportMedalStandingsPdf(
+  arena: ArenaData,
+  standings: MedalStandingRow[],
+  awards: MedalAwardEntry[]
+): void {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  drawLandscapeReportHeader(doc, arena, 'DATA PEROLEHAN MEDALI KONTINGEN');
+
+  autoTable(doc, {
+    startY: 30,
+    theme: 'grid',
+    styles: { fontSize: 9, cellPadding: 2.5, halign: 'center' },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+    columnStyles: {
+      1: { halign: 'left', fontStyle: 'bold' },
+      5: { fontStyle: 'bold' },
+    },
+    head: [['Peringkat', 'Kontingen / Perguruan', 'Emas', 'Perak', 'Perunggu', 'Total Medali']],
+    body:
+      standings.length > 0
+        ? standings.map((r) => [
+            String(r.rank),
+            r.contingent,
+            String(r.gold),
+            String(r.silver),
+            String(r.bronze),
+            String(r.total),
+          ])
+        : [['-', 'Belum ada data perolehan medali', '0', '0', '0', '0']],
+  });
+
+  if (awards.length > 0) {
+    const afterTableY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text('RINCIAN PERAIH MEDALI', 14, afterTableY);
+
+    autoTable(doc, {
+      startY: afterTableY + 3,
+      theme: 'striped',
+      styles: { fontSize: 8.5, cellPadding: 2.2 },
+      headStyles: { fillColor: [51, 65, 85], textColor: 255 },
+      head: [['No', 'Medali', 'Nama Atlet', 'Kontingen / Perguruan', 'Kelas / Kategori', 'Partai / Babak']],
+      body: awards.map((a, idx) => [
+        String(idx + 1),
+        a.medal,
+        a.athleteName,
+        a.contingent,
+        a.weightClass,
+        `${a.matchNumber} (${a.stage})`,
+      ]),
+    });
+  }
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  doc.save(`Perolehan_Medali_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStamp}.pdf`);
+}
+
+export function exportAthletesRecapPdf(arena: ArenaData, athletes: AthleteData[]): void {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  drawLandscapeReportHeader(doc, arena, 'REKAP DAFTAR SELURUH ATLET TERDAFTAR');
+
+  autoTable(doc, {
+    startY: 30,
+    theme: 'grid',
+    styles: { fontSize: 8.5, cellPadding: 2.2 },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+    head: [
+      [
+        'No',
+        'Nama Atlet',
+        'Kontingen / Perguruan',
+        'Kategori Usia',
+        'Jenis Kelamin',
+        'Kategori',
+        'Kelas Tanding / Jurus',
+        'Gelanggang',
+      ],
+    ],
+    body:
+      athletes.length > 0
+        ? athletes.map((a, idx) => [
+            String(idx + 1),
+            a.name,
+            a.contingent,
+            a.ageCategory || 'Dewasa',
+            a.gender || 'Putra',
+            a.competitionCategory || 'Tanding',
+            a.weightClass,
+            `Gelanggang ${a.gelanggang || 'A'}`,
+          ])
+        : [['-', 'Belum ada atlet terdaftar', '-', '-', '-', '-', '-', '-']],
+  });
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  doc.save(`Rekap_Data_Atlet_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStamp}.pdf`);
+}
+
+function formatScheduleStatus(status: MatchData['status']): string {
+  switch (status) {
+    case 'waiting':
+      return 'Menunggu';
+    case 'active':
+      return 'Berjalan';
+    case 'paused':
+      return 'Dijeda';
+    case 'break':
+      return 'Istirahat';
+    case 'finished':
+      return 'Selesai';
+  }
+}
+
+export function exportMatchSchedulePdf(arena: ArenaData, matches: MatchData[]): void {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  drawLandscapeReportHeader(doc, arena, 'JADWAL PERTANDINGAN (KONTROL PARTAI)');
+
+  autoTable(doc, {
+    startY: 30,
+    theme: 'grid',
+    styles: { fontSize: 8.5, cellPadding: 2.2 },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+    head: [
+      [
+        'No',
+        'Partai',
+        'Babak / Fase',
+        'Kelas / Kategori',
+        'Sudut Biru',
+        'Sudut Merah',
+        'Babak',
+        'Status',
+        'Skor & Pemenang',
+      ],
+    ],
+    body:
+      matches.length > 0
+        ? matches.map((m, idx) => [
+            String(idx + 1),
+            m.matchNumber,
+            m.stage,
+            m.weightClass,
+            `${m.blueName}\n(${m.blueContingent})`,
+            `${m.redName}\n(${m.redContingent})`,
+            `${m.totalRounds ?? 3} Babak`,
+            formatScheduleStatus(m.status),
+            m.winner
+              ? `${formatMatchScore(m, 'blue')} - ${formatMatchScore(m, 'red')} (${m.winner === 'blue' ? 'BIRU' : m.winner === 'red' ? 'MERAH' : 'SERI'}${m.winMethod ? ` · ${m.winMethod}` : ''})`
+              : `${formatMatchScore(m, 'blue')} - ${formatMatchScore(m, 'red')}`,
+          ])
+        : [['-', '-', '-', 'Belum ada jadwal pertandingan', '-', '-', '-', '-', '-']],
+  });
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  doc.save(`Jadwal_Pertandingan_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStamp}.pdf`);
+}
+
