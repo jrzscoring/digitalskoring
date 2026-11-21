@@ -4,6 +4,8 @@ export type MatchStatus = 'waiting' | 'active' | 'paused' | 'break' | 'finished'
 
 export type JudgeId = 1 | 2 | 3;
 
+export type JurusJudgeId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+
 export type AppView = 'landing' | 'sekretaris' | 'dewan' | 'timer' | 'juri' | 'scoreboard';
 
 export type WinMethod =
@@ -77,6 +79,13 @@ export interface JurusCornerData {
   judge1: JurusJudgeCornerScore;
   judge2: JurusJudgeCornerScore;
   judge3: JurusJudgeCornerScore;
+  judge4?: JurusJudgeCornerScore;
+  judge5?: JurusJudgeCornerScore;
+  judge6?: JurusJudgeCornerScore;
+  judge7?: JurusJudgeCornerScore;
+  judge8?: JurusJudgeCornerScore;
+  judge9?: JurusJudgeCornerScore;
+  judge10?: JurusJudgeCornerScore;
   penalties: JurusCornerPenalties;
   recordedElapsedMs: number;
   completed: boolean;
@@ -109,12 +118,17 @@ export interface MatchData {
   stage: string;
   competitionCategory?: CompetitionCategory;
   jurusType?: JurusCategory;
+  jurusJudgeCount?: number;
   activePerformerCorner?: Corner;
   jurusState?: JurusMatchState;
   blueName: string;
   blueContingent: string;
+  blueCountry?: string;
+  bluePhoto?: string;
   redName: string;
   redContingent: string;
+  redCountry?: string;
+  redPhoto?: string;
   roundDurationSec: number;
   currentRound: number;
   totalRounds?: 1 | 2 | 3;
@@ -141,6 +155,7 @@ export interface MatchData {
   judge2Vote?: JudgeVote;
   judge3Vote?: JudgeVote;
   verification?: VerificationState;
+  juriLocked?: boolean;
   winner: Corner | 'draw' | '';
   winMethod: string;
   finishedAtMs?: number;
@@ -169,6 +184,8 @@ export interface AthleteData {
   ownerId: string;
   name: string;
   contingent: string;
+  country?: string;
+  photo?: string;
   weightClass: string;
   gender: AthleteGender;
   ageCategory?: AthleteAgeCategory;

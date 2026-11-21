@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Lock, Minus, Plus, RotateCcw, Shield, Unlock } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, CheckCircle2, Lock, Maximize2, Minimize2, Minus, Plus, RotateCcw, Shield, Unlock } from 'lucide-react';
+import juriLogo from '../assets/juri1-logo.png';
+import pukulanIcon from '../assets/pukulan-white.png';
+import tendanganIcon from '../assets/tendangan-white.png';
 import { useArena } from '../context/ArenaContext';
-import type { AppView, Corner, JudgeId } from '../types/silat';
+import type { AppView, Corner, JudgeId, JurusJudgeId } from '../types/silat';
 import {
   CONSENSUS_WINDOW_MS,
   computeCornerJurusSummary,
@@ -11,11 +14,13 @@ import {
   formatJurusElapsedMs,
   formatJurusScore,
   formatMatchTime,
+  getJurusJudgeCount,
+  getJurusJudgeIds,
+  getJurusJudgeScore,
   getJurusType,
   isJurusMatch,
   isTunggalOrRegu,
 } from '../utils/ipsiRules';
-import { ModuleHeader } from './ModuleHeader';
 import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface JuriViewProps {
@@ -39,29 +44,60 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     toggleJurusJudgeSubmit,
   } = useArena();
 
-  const [judgeId, setJudgeId] = useState<JudgeId>(() => {
+  const [jurusJudgeId, setJurusJudgeId] = useState<JurusJudgeId>(() => {
     try {
-      const saved = sessionStorage.getItem('silat_selected_judge');
-      if (saved === '1' || saved === '2' || saved === '3') return Number(saved) as JudgeId;
+      const saved = Number(sessionStorage.getItem('silat_selected_judge'));
+      if (Number.isInteger(saved) && saved >= 1 && saved <= 10) return saved as JurusJudgeId;
     } catch {
       // ignore
     }
     return 1;
   });
+  const [tandingJudgeId, setTandingJudgeId] = useState<JudgeId | null>(null);
 
   const [feedback, setFeedback] = useState<{ text: string; tone: 'pending' | 'awarded' } | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
   const [selectedJurusCorner, setSelectedJurusCorner] = useState<Corner>(
     activeMatch.activePerformerCorner || 'blue'
   );
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // ignore fullscreen denial in sandbox/headless environments
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     try {
-      sessionStorage.setItem('silat_selected_judge', String(judgeId));
+      sessionStorage.setItem('silat_selected_judge', String(jurusJudgeId));
     } catch {
       // ignore
     }
-  }, [judgeId]);
+  }, [jurusJudgeId]);
 
   useEffect(() => {
     if (activeMatch.activePerformerCorner) {
@@ -75,10 +111,11 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     () => evaluateVerificationConsensus(activeVerification),
     [activeVerification]
   );
+  const currentTandingJudge: JudgeId = tandingJudgeId ?? 1;
   const myVerificationVote = activeVerification
-    ? judgeId === 1
+    ? currentTandingJudge === 1
       ? activeVerification.j1Vote
-      : judgeId === 2
+      : currentTandingJudge === 2
       ? activeVerification.j2Vote
       : activeVerification.j3Vote
     : 'none';
@@ -91,16 +128,25 @@ export function JuriView({ onNavigate }: JuriViewProps) {
   }, [isJurus, activeMatch.status, activeMatch.timerStartedAtMs]);
 
   const jurusType = getJurusType(activeMatch);
+  const jurusJudgeCount = getJurusJudgeCount(activeMatch);
+  const jurusJudgeIds = useMemo(() => getJurusJudgeIds(jurusJudgeCount), [jurusJudgeCount]);
   const jurusState = useMemo(() => ensureJurusState(activeMatch), [activeMatch]);
   const isFinished = activeMatch.status === 'finished';
 
+  useEffect(() => {
+    if (isJurus && jurusJudgeId > jurusJudgeCount) {
+      setJurusJudgeId(1);
+    }
+  }, [isJurus, jurusJudgeId, jurusJudgeCount]);
+
   if (isJurus) {
+    const judgeId: JurusJudgeId = jurusJudgeId <= jurusJudgeCount ? jurusJudgeId : 1;
+    const setJudgeId = setJurusJudgeId;
     const activePerformer = activeMatch.activePerformerCorner || 'blue';
-    const judgeKey = judgeId === 1 ? 'judge1' : judgeId === 2 ? 'judge2' : 'judge3';
     const cornerData = jurusState[selectedJurusCorner];
-    const myScore = cornerData[judgeKey];
+    const myScore = getJurusJudgeScore(cornerData, judgeId);
     const myTotal = computeJudgeCornerScore(jurusType, myScore);
-    const cornerSummary = computeCornerJurusSummary(jurusType, cornerData);
+    const cornerSummary = computeCornerJurusSummary(jurusType, cornerData, jurusJudgeCount);
     const isLocked = myScore.submitted || isFinished;
     const isTruthCategory = isTunggalOrRegu(jurusType);
 
@@ -124,20 +170,29 @@ export function JuriView({ onNavigate }: JuriViewProps) {
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
-        <ModuleHeader currentView="juri" onNavigate={onNavigate} />
-
         <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col gap-4 justify-between">
-          <TournamentIdentityBanner arena={arena} compact />
+          <TournamentIdentityBanner
+            arena={arena}
+            compact
+            onBack={() => onNavigate('landing')}
+            showFullscreen
+          />
 
           {/* Top Judge Selector + Jurus Category & Dual Clock Strip */}
           <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-3.5 flex flex-col md:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 bg-black/70 p-1 rounded-xl border border-purple-500/40 w-full md:w-auto">
-              {([1, 2, 3] as JudgeId[]).map((jid) => (
+            <div
+              data-testid="juri-jurus-judge-selector"
+              className="flex flex-wrap items-center gap-1.5 bg-black/70 p-1.5 rounded-xl border border-purple-500/40 w-full md:w-auto"
+            >
+              {jurusJudgeIds.map((jid) => (
                 <button
                   key={jid}
                   type="button"
+                  data-testid={`juri-jurus-judge-btn-${jid}`}
                   onClick={() => setJudgeId(jid)}
-                  className={`flex-1 md:flex-none min-h-[40px] px-4 rounded-lg text-sm font-bold cursor-pointer transition-colors ${
+                  className={`min-h-[38px] ${
+                    jurusJudgeCount > 5 ? 'px-3 text-xs sm:text-sm' : 'flex-1 md:flex-none px-4 text-sm'
+                  } rounded-lg font-bold cursor-pointer transition-colors ${
                     judgeId === jid
                       ? 'bg-yellow-400 text-black'
                       : 'text-blue-200 hover:bg-purple-950 hover:text-white'
@@ -175,9 +230,9 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               const isLive = activePerformer === corner;
               const name = isBlue ? activeMatch.blueName : activeMatch.redName;
               const cont = isBlue ? activeMatch.blueContingent : activeMatch.redContingent;
-              const jSummary = computeCornerJurusSummary(jurusType, jurusState[corner]);
-              const jVal = jSummary.judgeTotals[judgeId - 1];
-              const locked = jurusState[corner][judgeKey].submitted;
+              const jSummary = computeCornerJurusSummary(jurusType, jurusState[corner], jurusJudgeCount);
+              const jVal = jSummary.judgeTotals[judgeId - 1] ?? 0;
+              const locked = getJurusJudgeScore(jurusState[corner], judgeId).submitted;
 
               return (
                 <button
@@ -447,8 +502,74 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     );
   }
 
+  if (tandingJudgeId === null) {
+    return (
+      <div className="min-h-[100dvh] w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
+        <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col gap-6">
+          <div className="shrink-0 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate('landing')}
+              aria-label="Kembali ke Menu Utama"
+              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
+            >
+              <ArrowLeft className="w-4 h-4 text-yellow-300 shrink-0" />
+              <span>Kembali</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void toggleFullscreen()}
+              aria-label={isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}
+              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-4 h-4 text-yellow-300 shrink-0" />
+              ) : (
+                <Maximize2 className="w-4 h-4 text-yellow-300 shrink-0" />
+              )}
+              <span className="hidden sm:inline">{isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}</span>
+            </button>
+          </div>
+
+          <section
+            data-testid="juri-selection-screen"
+            className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 py-4"
+          >
+            <h1 className="font-display text-2xl sm:text-4xl font-extrabold uppercase tracking-wide text-white text-center">
+              Pilih Juri yang Bertugas
+            </h1>
+
+            <div className="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-5">
+              {([1, 2, 3] as JudgeId[]).map((jid) => (
+                <button
+                  key={jid}
+                  type="button"
+                  data-testid={`select-judge-${jid}`}
+                  onClick={() => setTandingJudgeId(jid)}
+                  className="group min-h-[190px] sm:min-h-[220px] p-6 rounded-3xl bg-gradient-to-b from-blue-950/85 via-[#130829]/95 to-black/95 border-2 border-blue-500/45 hover:border-yellow-400 hover:from-blue-900/90 hover:to-[#230847]/95 active:scale-[0.98] transition-all duration-150 flex flex-col items-center justify-center gap-4 cursor-pointer shadow-xl shadow-black/60"
+                >
+                  <img
+                    src={juriLogo}
+                    alt={`Logo Juri ${jid}`}
+                    className="w-20 h-20 object-contain select-none group-hover:scale-110 transition-transform duration-150"
+                  />
+                  <div className="font-display text-2xl sm:text-3xl font-extrabold tracking-wide text-white group-hover:text-yellow-300 transition-colors">
+                    Juri {jid}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  const judgeId: JudgeId = tandingJudgeId;
+  const isJuriLocked = !isJurus && Boolean(activeMatch.juriLocked) && !isFinished;
+
   const handleVote = async (corner: Corner, points: 1 | 2) => {
-    if (activeMatch.status === 'finished') return;
+    if (activeMatch.status === 'finished' || isJuriLocked) return;
     const label = points === 1 ? 'Pukulan (+1)' : 'Tendangan (+2)';
     const cornerText = corner === 'blue' ? 'Biru' : 'Merah';
     const result = await sendJudgeVote(judgeId, corner, points);
@@ -458,8 +579,12 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     } else {
       setFeedback({ text: `Terkirim (${label} ${cornerText}) — menunggu konsensus juri lain`, tone: 'pending' });
     }
-    window.setTimeout(() => {
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = window.setTimeout(() => {
       setFeedback(null);
+      feedbackTimerRef.current = null;
     }, CONSENSUS_WINDOW_MS);
   };
 
@@ -492,36 +617,31 @@ export function JuriView({ onNavigate }: JuriViewProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
-      <ModuleHeader currentView="juri" onNavigate={onNavigate} />
-
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col gap-4 justify-between">
-        <TournamentIdentityBanner arena={arena} compact />
+    <div className="min-h-[100dvh] w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col select-none">
+      <main className="flex-1 w-full px-3 sm:px-5 lg:px-6 py-3 sm:py-4 flex flex-col gap-3 sm:gap-4">
+        <div className="shrink-0">
+          <TournamentIdentityBanner
+            arena={arena}
+            compact
+            onBack={() => onNavigate('landing')}
+            showFullscreen
+          />
+        </div>
 
         {/* Top Judge Identity & Match Clock Strip */}
-        <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 bg-black/70 p-1 rounded-xl border border-blue-500/40 w-full sm:w-auto">
-            {([1, 2, 3] as JudgeId[]).map((jid) => (
-              <button
-                key={jid}
-                type="button"
-                onClick={() => setJudgeId(jid)}
-                className={`flex-1 sm:flex-none min-h-[40px] px-4 rounded-lg text-sm font-bold cursor-pointer transition-colors ${
-                  judgeId === jid
-                    ? 'bg-yellow-400 text-black'
-                    : 'text-blue-200 hover:bg-blue-950 hover:text-white'
-                }`}
-              >
-                Juri {jid}
-              </button>
-            ))}
+        <section className="shrink-0 rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 px-3.5 py-2.5 sm:px-5 sm:py-3 flex flex-wrap items-center justify-between gap-2.5">
+          <div
+            data-testid="active-judge-badge"
+            className="px-4 py-1.5 sm:py-2 rounded-xl bg-yellow-400 text-black font-display text-sm sm:text-lg font-extrabold uppercase tracking-wider flex items-center gap-2 shrink-0"
+          >
+            <span>Juri {judgeId}</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-yellow-300 uppercase">
+          <div className="flex items-center gap-2.5 sm:gap-3.5">
+            <span className="text-xs sm:text-sm font-bold text-yellow-300 uppercase">
               Babak {activeMatch.currentRound}
             </span>
-            <span className="font-mono text-2xl font-extrabold tabular-nums text-white">
+            <span className="font-mono text-xl sm:text-2xl font-extrabold tabular-nums text-white">
               {formatMatchTime(liveTimerMs)}
             </span>
             <div className="flex items-center gap-1.5">
@@ -530,107 +650,126 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           </div>
         </section>
 
-        {/* Live Consensus Feedback Strip */}
-        <div className="min-h-[44px] flex items-center justify-center">
-          {feedback ? (
-            <div
-              role="status"
-              className={`w-full px-4 py-2.5 rounded-xl border text-center text-sm font-bold flex items-center justify-center gap-2 ${
-                feedback.tone === 'awarded'
-                  ? 'bg-blue-950/90 border-yellow-400 text-yellow-300'
-                  : 'bg-[#17092e]/90 border-blue-400/60 text-blue-200'
-              }`}
-            >
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-yellow-300" />
-              <span>{feedback.text}</span>
-            </div>
-          ) : (
-            <div className="text-xs text-blue-200 text-center">
-              {activeMatch.matchNumber} &middot; Tekan Pukulan (+1) atau Tendangan (+2) sesuai teknik sah (Konsensus min. 2 dari 3 Juri)
+        {/* Ergonomic 2-Column Thumb Pads (Blue Left, Red Right) */}
+        <section className="relative flex-1 min-h-[300px] grid grid-cols-2 gap-3 sm:gap-5">
+          {/* Non-shifting Live Consensus Feedback Overlay */}
+          {feedback && (
+            <div className="pointer-events-none absolute top-2.5 left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-xl">
+              <div
+                role="status"
+                className={`w-full px-4 py-2 rounded-xl border text-center text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-xl backdrop-blur-md ${
+                  feedback.tone === 'awarded'
+                    ? 'bg-blue-950/95 border-yellow-400 text-yellow-300'
+                    : 'bg-[#17092e]/95 border-blue-400/70 text-blue-100'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-yellow-300" />
+                <span className="truncate">{feedback.text}</span>
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Ergonomic 2-Column Thumb Pads (Blue Left, Red Right) */}
-        <section className="flex-1 grid grid-cols-2 gap-3 sm:gap-5">
-          {/* Sudut Biru Pad */}
-          <div className="rounded-3xl bg-gradient-to-b from-blue-600 via-blue-700 to-blue-800 border-2 border-blue-300/80 p-3 sm:p-5 flex flex-col justify-between gap-4">
-            <div className="text-center space-y-0.5">
-              <div className="text-xs font-bold uppercase tracking-wider text-yellow-300">Sudut Biru</div>
-              <div className="font-display text-xl sm:text-3xl font-bold text-white truncate">
-                {activeMatch.blueName}
+          {isJuriLocked && (
+            <div
+              data-testid="juri-locked-overlay"
+              className="absolute inset-0 z-20 rounded-3xl bg-[#090315]/90 backdrop-blur-sm border-2 border-pink-500/75 flex flex-col items-center justify-center text-center p-6 gap-3 shadow-[0_0_40px_rgba(236,72,153,0.25)]"
+            >
+              <div className="w-14 h-14 rounded-2xl bg-pink-600/20 border border-pink-400/70 flex items-center justify-center">
+                <Lock className="w-7 h-7 text-pink-400" />
               </div>
-              <div className="text-xs text-blue-100 truncate">{activeMatch.blueContingent}</div>
+              <div className="font-display text-xl sm:text-2xl font-extrabold uppercase tracking-wider text-white">
+                Panel Juri Terkunci
+              </div>
+              <p className="max-w-md text-xs sm:text-sm text-purple-200 leading-relaxed">
+                Jeda antar babak sedang berlangsung. Tombol input nilai juri dikunci sementara hingga dibuka kembali oleh petugas Timer.
+              </p>
             </div>
+          )}
 
-            <div className="flex flex-col gap-3 flex-1 justify-end">
-              <button
-                type="button"
-                disabled={isFinished}
-                onClick={() => void handleVote('blue', 1)}
-                className="min-h-[96px] sm:min-h-[132px] rounded-2xl bg-blue-500 hover:bg-blue-400 active:scale-[0.98] disabled:opacity-40 border-2 border-blue-200/70 text-white font-display flex flex-col items-center justify-center gap-1 transition-transform cursor-pointer shadow-lg shadow-blue-950/60"
-              >
-                <span className="text-xl sm:text-3xl font-extrabold tracking-wide">Pukulan</span>
-                <span className="font-mono text-2xl sm:text-4xl font-extrabold text-yellow-300">+1</span>
-              </button>
+          {/* Sudut Biru Pad (Hanya Tombol Pukulan & Tendangan) */}
+          <div
+            data-testid="juri-blue-pad"
+            className="rounded-3xl bg-gradient-to-b from-blue-600 via-blue-700 to-blue-900 border-2 border-blue-300/80 p-3 sm:p-4 lg:p-5 grid grid-rows-2 gap-3 sm:gap-4 h-full"
+          >
+            <button
+              type="button"
+              aria-label="Sudut Biru - Pukulan (+1)"
+              data-testid="juri-blue-pukulan-btn"
+              disabled={isFinished || isJuriLocked}
+              onClick={() => void handleVote('blue', 1)}
+              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-blue-500 hover:bg-blue-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
+            >
+              <img
+                src={pukulanIcon}
+                alt="Pukulan"
+                className="max-h-[72%] max-w-[78%] h-[clamp(4.25rem,min(17vw,18dvh),9.5rem)] w-auto object-contain pointer-events-none select-none"
+              />
+            </button>
 
-              <button
-                type="button"
-                disabled={isFinished}
-                onClick={() => void handleVote('blue', 2)}
-                className="min-h-[112px] sm:min-h-[156px] rounded-2xl bg-blue-700 hover:bg-blue-600 active:scale-[0.98] disabled:opacity-40 border-2 border-blue-300/60 text-white font-display flex flex-col items-center justify-center gap-1 transition-transform cursor-pointer shadow-lg shadow-blue-950/60"
-              >
-                <span className="text-xl sm:text-3xl font-extrabold tracking-wide">Tendangan</span>
-                <span className="font-mono text-2xl sm:text-4xl font-extrabold text-yellow-300">+2</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              aria-label="Sudut Biru - Tendangan (+2)"
+              data-testid="juri-blue-tendangan-btn"
+              disabled={isFinished || isJuriLocked}
+              onClick={() => void handleVote('blue', 2)}
+              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-blue-800/95 hover:bg-blue-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
+            >
+              <img
+                src={tendanganIcon}
+                alt="Tendangan"
+                className="max-h-[78%] max-w-[78%] h-[clamp(4.75rem,min(19vw,21dvh),10.5rem)] w-auto object-contain pointer-events-none select-none"
+              />
+            </button>
           </div>
 
-          {/* Sudut Merah Pad */}
-          <div className="rounded-3xl bg-gradient-to-b from-red-600 via-red-700 to-red-800 border-2 border-red-300/80 p-3 sm:p-5 flex flex-col justify-between gap-4">
-            <div className="text-center space-y-0.5">
-              <div className="text-xs font-bold uppercase tracking-wider text-yellow-300">Sudut Merah</div>
-              <div className="font-display text-xl sm:text-3xl font-bold text-white truncate">
-                {activeMatch.redName}
-              </div>
-              <div className="text-xs text-red-100 truncate">{activeMatch.redContingent}</div>
-            </div>
+          {/* Sudut Merah Pad (Hanya Tombol Pukulan & Tendangan) */}
+          <div
+            data-testid="juri-red-pad"
+            className="rounded-3xl bg-gradient-to-b from-red-600 via-red-700 to-red-900 border-2 border-red-300/80 p-3 sm:p-4 lg:p-5 grid grid-rows-2 gap-3 sm:gap-4 h-full"
+          >
+            <button
+              type="button"
+              aria-label="Sudut Merah - Pukulan (+1)"
+              data-testid="juri-red-pukulan-btn"
+              disabled={isFinished || isJuriLocked}
+              onClick={() => void handleVote('red', 1)}
+              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-red-500 hover:bg-red-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
+            >
+              <img
+                src={pukulanIcon}
+                alt="Pukulan"
+                className="max-h-[72%] max-w-[78%] h-[clamp(4.25rem,min(17vw,18dvh),9.5rem)] w-auto object-contain pointer-events-none select-none"
+              />
+            </button>
 
-            <div className="flex flex-col gap-3 flex-1 justify-end">
-              <button
-                type="button"
-                disabled={isFinished}
-                onClick={() => void handleVote('red', 1)}
-                className="min-h-[96px] sm:min-h-[132px] rounded-2xl bg-red-500 hover:bg-red-400 active:scale-[0.98] disabled:opacity-40 border-2 border-red-200/70 text-white font-display flex flex-col items-center justify-center gap-1 transition-transform cursor-pointer shadow-lg shadow-red-950/60"
-              >
-                <span className="text-xl sm:text-3xl font-extrabold tracking-wide">Pukulan</span>
-                <span className="font-mono text-2xl sm:text-4xl font-extrabold text-yellow-300">+1</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isFinished}
-                onClick={() => void handleVote('red', 2)}
-                className="min-h-[112px] sm:min-h-[156px] rounded-2xl bg-red-700 hover:bg-red-600 active:scale-[0.98] disabled:opacity-40 border-2 border-red-300/60 text-white font-display flex flex-col items-center justify-center gap-1 transition-transform cursor-pointer shadow-lg shadow-red-950/60"
-              >
-                <span className="text-xl sm:text-3xl font-extrabold tracking-wide">Tendangan</span>
-                <span className="font-mono text-2xl sm:text-4xl font-extrabold text-yellow-300">+2</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              aria-label="Sudut Merah - Tendangan (+2)"
+              data-testid="juri-red-tendangan-btn"
+              disabled={isFinished || isJuriLocked}
+              onClick={() => void handleVote('red', 2)}
+              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-red-800/95 hover:bg-red-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
+            >
+              <img
+                src={tendanganIcon}
+                alt="Tendangan"
+                className="max-h-[78%] max-w-[78%] h-[clamp(4.75rem,min(19vw,21dvh),10.5rem)] w-auto object-contain pointer-events-none select-none"
+              />
+            </button>
           </div>
         </section>
 
         {/* Bottom Clear Vote / Current Score Summary */}
-        <section className="flex items-center justify-between gap-2 py-2 border-t border-purple-800/60 text-xs text-blue-200">
+        <section className="shrink-0 flex items-center justify-between gap-2 pt-2 border-t border-purple-800/60 text-xs sm:text-sm text-blue-200">
           <div className="font-mono tabular-nums whitespace-nowrap">
             Skor: <span className="text-blue-300 font-bold">Biru {activeMatch.blueScore}</span> &ndash;{' '}
             <span className="text-red-300 font-bold">{activeMatch.redScore} Merah</span>
           </div>
           <button
             type="button"
-            disabled={isFinished || !myVote || myVote.corner === 'none'}
+            disabled={isFinished || isJuriLocked || !myVote || myVote.corner === 'none'}
             onClick={() => void clearJudgeVote(judgeId)}
-            className="min-h-[38px] px-3 py-1.5 rounded-lg bg-blue-950/80 border border-blue-500/45 hover:bg-blue-900 hover:border-yellow-400 disabled:opacity-40 text-white font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+            className="min-h-[40px] px-3.5 py-1.5 rounded-lg bg-blue-950/80 border border-blue-500/45 hover:bg-blue-900 hover:border-yellow-400 active:scale-[0.97] disabled:opacity-40 text-white font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer touch-manipulation transition-all duration-75"
           >
             <RotateCcw className="w-3.5 h-3.5 text-yellow-300" />
             <span>Hapus Vote J{judgeId}</span>
@@ -638,7 +777,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
         </section>
       </main>
 
-      {/* Pop-up Verifikasi Dewan untuk Panel Juri 1, 2, 3 (Kategori Tanding) */}
+      {/* Pop-up Verifikasi Dewan untuk Panel Juri (Kategori Tanding) */}
       {activeVerification && (
         <div
           role="dialog"
@@ -646,24 +785,6 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           aria-label={`Verifikasi Juri ${judgeId}`}
           className="fixed inset-0 z-50 bg-[#050814]/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 gap-3"
         >
-          {/* Switcher Identitas Juri 1 / 2 / 3 agar mudah berpindah jika dalam 1 perangkat */}
-          <div className="flex items-center gap-1.5 bg-[#091229] p-1 rounded-xl border border-amber-400/50">
-            {([1, 2, 3] as JudgeId[]).map((jid) => (
-              <button
-                key={jid}
-                type="button"
-                onClick={() => setJudgeId(jid)}
-                className={`min-h-[34px] px-3.5 rounded-lg text-xs font-bold cursor-pointer transition-colors ${
-                  judgeId === jid
-                    ? 'bg-amber-400 text-black'
-                    : 'text-amber-200 hover:bg-blue-950 hover:text-white'
-                }`}
-              >
-                Juri {jid}
-              </button>
-            ))}
-          </div>
-
           <div className="max-w-xl w-full rounded-2xl bg-gradient-to-b from-[#071538] via-[#050d24] to-[#04091a] border-2 border-amber-400/85 shadow-[0_0_40px_rgba(251,191,36,0.25)] p-6 sm:p-7 flex flex-col items-center text-center gap-3.5">
             <div className="w-14 h-14 rounded-full bg-[#091533] border border-amber-400/70 flex items-center justify-center shadow-[0_0_20px_rgba(251,191,36,0.2)]">
               <Shield className="w-7 h-7 text-amber-400" />

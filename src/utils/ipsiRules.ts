@@ -7,6 +7,7 @@ import type {
   JurusCornerData,
   JurusCornerPenalties,
   JurusJudgeCornerScore,
+  JurusJudgeId,
   JurusMatchState,
   JurusPenaltyType,
   MatchData,
@@ -23,6 +24,32 @@ export const JURUS_TUNGGAL_REGU_BASE = 990; // 9.90 in hundredths
 export const JURUS_GANDA_BEBAS_BASE = 910; // 9.10 in hundredths
 export const JURUS_PENALTY_HUNDREDTHS = 50; // -0.50 per violation
 export const JURUS_DEFAULT_DURATION_SEC = 180; // 03:00 standard IPSI performance duration
+export const JURUS_JUDGE_COUNT_OPTIONS = [4, 5, 6, 7, 8, 9, 10] as const;
+
+export type JurusJudgeKey =
+  | 'judge1'
+  | 'judge2'
+  | 'judge3'
+  | 'judge4'
+  | 'judge5'
+  | 'judge6'
+  | 'judge7'
+  | 'judge8'
+  | 'judge9'
+  | 'judge10';
+
+const ALL_JURUS_JUDGE_KEYS: JurusJudgeKey[] = [
+  'judge1',
+  'judge2',
+  'judge3',
+  'judge4',
+  'judge5',
+  'judge6',
+  'judge7',
+  'judge8',
+  'judge9',
+  'judge10',
+];
 
 export const JURUS_PENALTY_LABELS: Record<JurusPenaltyType, string> = {
   timeViolation: 'Pelanggaran Waktu (±5 dtk)',
@@ -401,10 +428,38 @@ export function createInitialJurusState(): JurusMatchState {
   };
 }
 
+export function normalizeJurusJudgeCount(raw?: number | null): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 3;
+  const rounded = Math.round(raw);
+  if (rounded < 3) return 3;
+  if (rounded > 10) return 10;
+  return rounded;
+}
+
+export function getJurusJudgeCount(match?: Partial<MatchData> | null): number {
+  return normalizeJurusJudgeCount(match?.jurusJudgeCount);
+}
+
+export function getJurusJudgeIds(judgeCount: number): JurusJudgeId[] {
+  const count = normalizeJurusJudgeCount(judgeCount);
+  return Array.from({ length: count }, (_, idx) => (idx + 1) as JurusJudgeId);
+}
+
+export function getJurusJudgeKey(judgeId: JurusJudgeId): JurusJudgeKey {
+  return `judge${judgeId}` as JurusJudgeKey;
+}
+
+export function getJurusJudgeScore(
+  cornerData: JurusCornerData,
+  judgeId: JurusJudgeId
+): JurusJudgeCornerScore {
+  return cornerData[getJurusJudgeKey(judgeId)] || createEmptyJurusJudgeScore();
+}
+
 function normalizeCornerData(raw?: Partial<JurusCornerData>): JurusCornerData {
   const empty = createEmptyJurusCornerData();
   if (!raw) return empty;
-  return {
+  const normalized: JurusCornerData = {
     judge1: { ...empty.judge1, ...(raw.judge1 || {}) },
     judge2: { ...empty.judge2, ...(raw.judge2 || {}) },
     judge3: { ...empty.judge3, ...(raw.judge3 || {}) },
@@ -412,6 +467,14 @@ function normalizeCornerData(raw?: Partial<JurusCornerData>): JurusCornerData {
     recordedElapsedMs: typeof raw.recordedElapsedMs === 'number' ? raw.recordedElapsedMs : 0,
     completed: Boolean(raw.completed),
   };
+  for (let i = 3; i < ALL_JURUS_JUDGE_KEYS.length; i += 1) {
+    const key = ALL_JURUS_JUDGE_KEYS[i];
+    const extra = raw[key];
+    if (extra) {
+      normalized[key] = { ...createEmptyJurusJudgeScore(), ...extra };
+    }
+  }
+  return normalized;
 }
 
 export function ensureJurusState(match?: Partial<MatchData> | null): JurusMatchState {
@@ -424,8 +487,9 @@ export function ensureJurusState(match?: Partial<MatchData> | null): JurusMatchS
 
 export function hasJurusCornerActivity(cornerData: JurusCornerData): boolean {
   if (cornerData.completed || cornerData.recordedElapsedMs > 0) return true;
-  const judges = [cornerData.judge1, cornerData.judge2, cornerData.judge3];
-  for (const j of judges) {
+  for (const key of ALL_JURUS_JUDGE_KEYS) {
+    const j = cornerData[key];
+    if (!j) continue;
     if (
       j.submitted ||
       j.wrongMoves > 0 ||
@@ -459,7 +523,7 @@ export function computeJudgeCornerScore(
 }
 
 export interface JurusCornerSummary {
-  judgeTotals: [number, number, number];
+  judgeTotals: number[];
   median: number;
   mean: number;
   stdDev: number;
@@ -470,15 +534,23 @@ export interface JurusCornerSummary {
 
 export function computeCornerJurusSummary(
   jurusType: JurusCategory,
-  cornerData: JurusCornerData
+  cornerData: JurusCornerData,
+  judgeCount: number = 3
 ): JurusCornerSummary {
-  const j1 = computeJudgeCornerScore(jurusType, cornerData.judge1);
-  const j2 = computeJudgeCornerScore(jurusType, cornerData.judge2);
-  const j3 = computeJudgeCornerScore(jurusType, cornerData.judge3);
-  const sorted = [j1, j2, j3].sort((a, b) => a - b);
-  const median = sorted[1];
-  const mean = (j1 + j2 + j3) / 3;
-  const variance = ((j1 - mean) ** 2 + (j2 - mean) ** 2 + (j3 - mean) ** 2) / 3;
+  const count = normalizeJurusJudgeCount(judgeCount);
+  const judgeIds = getJurusJudgeIds(count);
+  const judgeTotals = judgeIds.map((jid) =>
+    computeJudgeCornerScore(jurusType, getJurusJudgeScore(cornerData, jid))
+  );
+  const sorted = [...judgeTotals].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 1
+      ? sorted[mid]
+      : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  const sum = judgeTotals.reduce((acc, v) => acc + v, 0);
+  const mean = sum / count;
+  const variance = judgeTotals.reduce((acc, v) => acc + (v - mean) ** 2, 0) / count;
   const stdDev = Math.sqrt(variance);
 
   const p = cornerData.penalties;
@@ -492,7 +564,7 @@ export function computeCornerJurusSummary(
   const finalScore = Math.max(0, median - penaltyTotal);
 
   return {
-    judgeTotals: [j1, j2, j3],
+    judgeTotals,
     median,
     mean,
     stdDev,
@@ -542,9 +614,10 @@ export function determineOfficialWinner(match: MatchData): WinnerDecision {
 
   if (isJurusMatch(match)) {
     const jurusType = getJurusType(match);
+    const jurusJudgeCount = getJurusJudgeCount(match);
     const jState = ensureJurusState(match);
-    const blueSummary = computeCornerJurusSummary(jurusType, jState.blue);
-    const redSummary = computeCornerJurusSummary(jurusType, jState.red);
+    const blueSummary = computeCornerJurusSummary(jurusType, jState.blue, jurusJudgeCount);
+    const redSummary = computeCornerJurusSummary(jurusType, jState.red, jurusJudgeCount);
 
     const blueVal = match.blueScore > 0 || hasJurusCornerActivity(jState.blue) ? match.blueScore || blueSummary.finalScore : 0;
     const redVal = match.redScore > 0 || hasJurusCornerActivity(jState.red) ? match.redScore || redSummary.finalScore : 0;

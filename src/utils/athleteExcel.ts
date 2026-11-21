@@ -9,6 +9,7 @@ import type {
   CompetitionCategory,
   MatchData,
 } from '../types/silat';
+import { resolveCountryInfo } from './countries';
 import { formatMatchScore, getJurusType, isJurusMatch } from './ipsiRules';
 
 export const AGE_CATEGORIES: AthleteAgeCategory[] = [
@@ -247,6 +248,7 @@ export function downloadAthleteTemplateExcel(): void {
     {
       'Nama Atlet': 'Ahmad Fauzi',
       'Kontingen': 'DKI Jakarta',
+      'Negara Asal': 'IDN',
       'Kategori Usia': 'Dewasa',
       'Jenis Kelamin': 'Putra',
       'Kategori Pertandingan': 'Tanding',
@@ -256,6 +258,7 @@ export function downloadAthleteTemplateExcel(): void {
     {
       'Nama Atlet': 'Siti Rahma',
       'Kontingen': 'Jawa Barat',
+      'Negara Asal': 'IDN',
       'Kategori Usia': 'Remaja',
       'Jenis Kelamin': 'Putri',
       'Kategori Pertandingan': 'Jurus',
@@ -265,6 +268,7 @@ export function downloadAthleteTemplateExcel(): void {
     {
       'Nama Atlet': 'Bima Pratama',
       'Kontingen': 'Jawa Tengah',
+      'Negara Asal': 'MAS',
       'Kategori Usia': 'Usia Dini 1',
       'Jenis Kelamin': 'Putra',
       'Kategori Pertandingan': 'Jurus',
@@ -277,6 +281,7 @@ export function downloadAthleteTemplateExcel(): void {
   wsTemplate['!cols'] = [
     { wch: 24 },
     { wch: 22 },
+    { wch: 14 },
     { wch: 16 },
     { wch: 15 },
     { wch: 22 },
@@ -288,6 +293,7 @@ export function downloadAthleteTemplateExcel(): void {
   const guideRows = [
     { Kolom: 'Nama Atlet', Keterangan: 'Nama lengkap atlet peserta (wajib diisi)' },
     { Kolom: 'Kontingen', Keterangan: 'Nama kontingen / daerah / perguruan (wajib diisi)' },
+    { Kolom: 'Negara Asal', Keterangan: 'Kode/nama negara asal atlet (contoh: IDN, MAS, SGP, THA, VNM, NED, dll.)' },
     {
       Kolom: 'Kategori Usia',
       Keterangan: 'Pilihan IPSI 2026 & PERSILAT: Usia Dini 1, Usia Dini 2, Usia Dini, Pra Remaja, Remaja, Dewasa, Master',
@@ -315,6 +321,7 @@ export function exportAthletesExcel(athletes: AthleteData[]): void {
     No: idx + 1,
     'Nama Atlet': a.name,
     'Kontingen': a.contingent,
+    'Negara Asal': resolveCountryInfo(a.country, a.contingent).code,
     'Kategori Usia': a.ageCategory || 'Dewasa',
     'Jenis Kelamin': a.gender || 'Putra',
     'Kategori Pertandingan': normalizeCompetitionCategory(a.competitionCategory || 'Tanding'),
@@ -327,6 +334,7 @@ export function exportAthletesExcel(athletes: AthleteData[]): void {
     { wch: 6 },
     { wch: 26 },
     { wch: 22 },
+    { wch: 14 },
     { wch: 16 },
     { wch: 15 },
     { wch: 22 },
@@ -391,6 +399,13 @@ export async function parseAthletesExcel(
       continue;
     }
 
+    const countryRaw = pickField(normalizedRow, [
+      'negara asal',
+      'negara',
+      'asal negara',
+      'country',
+      'nation',
+    ]);
     const ageRaw = pickField(normalizedRow, ['kategori usia', 'usia', 'kelompok usia', 'kelompok umur', 'age']);
     const genderRaw = pickField(normalizedRow, ['jenis kelamin', 'kelamin', 'gender', 'jk', 'kategori']);
     const compRaw = pickField(normalizedRow, [
@@ -418,6 +433,7 @@ export async function parseAthletesExcel(
     parsed.push({
       name,
       contingent,
+      country: resolveCountryInfo(countryRaw, contingent).code,
       ageCategory,
       gender: normalizeGender(genderRaw),
       competitionCategory,

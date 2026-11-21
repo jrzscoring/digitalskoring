@@ -19,6 +19,7 @@ import { db, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from
 import type { ArenaData, AthleteData, BracketMatchSlot, MatchData, MatchEvent } from '../types/silat';
 import {
   acquireOfflineSyncLock,
+  getBackupStorageKey,
   getPendingFirestoreOps,
   isBrowserOnline,
   isOfflineNetworkError,
@@ -26,11 +27,13 @@ import {
   isRtdbBackupDirty,
   markRtdbBackupSynced,
   readOfflineBackup,
+  readRecordFromIndexedDb,
   releaseOfflineSyncLock,
   removePendingFirestoreOps,
   saveFirestoreSnapshotBackup,
   saveRtdbLocalBackup,
   type LocalStorePayload,
+  type OfflineBackupRecord,
 } from '../utils/offlineSync';
 
 export type { LocalStorePayload };
@@ -131,7 +134,7 @@ export function useFirestoreSync({
 
   const isFirestoreActive = Boolean(user && cloudArena);
 
-  // Track browser online/offline transitions
+  // Track browser online/offline transitions and wake-up focus events
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -142,12 +145,22 @@ export function useFirestoreSync({
     const handleOffline = () => {
       setIsOnline(false);
     };
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible' && isBrowserOnline()) {
+        setIsOnline(true);
+        setReconnectTick((n) => n + 1);
+      }
+    };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, []);
 
@@ -347,11 +360,10 @@ export function useFirestoreSync({
     let unsubBrackets: (() => void) | null = null;
     let cancelled = false;
 
-    const hydrateFromBackup = () => {
-      const backup = readOfflineBackup(targetArenaId);
-      if (backup && backup.payload.arena) {
+    const applyBackupPayload = (backup: OfflineBackupRecord | null): boolean => {
+      if (backup && backup.payload?.arena && Array.isArray(backup.payload.matches) && backup.payload.matches.length > 0) {
         setCloudArena(backup.payload.arena);
-        setCloudMatches(backup.payload.matches || []);
+        setCloudMatches(backup.payload.matches);
         setCloudAthletes(backup.payload.athletes || []);
         setCloudBrackets(backup.payload.brackets || []);
         const evList = backup.payload.eventsByMatch?.[activeMatchId] || [];
@@ -363,9 +375,26 @@ export function useFirestoreSync({
       return false;
     };
 
+    const hydrateFromBackup = (): boolean => {
+      const localBackup = readOfflineBackup(targetArenaId);
+      if (applyBackupPayload(localBackup)) {
+        return true;
+      }
+      void readRecordFromIndexedDb<OfflineBackupRecord>(getBackupStorageKey(targetArenaId)).then(
+        (idbBackup) => {
+          if (!cancelled && idbBackup) {
+            applyBackupPayload(idbBackup);
+          }
+        }
+      );
+      return false;
+    };
+
     const initAndSubscribe = async () => {
+      // Hydrate cached data immediately so scoring remains responsive even while network connects
+      hydrateFromBackup();
+
       if (!isBrowserOnline()) {
-        hydrateFromBackup();
         return;
       }
 
@@ -397,8 +426,10 @@ export function useFirestoreSync({
             stage: 'Final',
             blueName: 'Ahmad Fauzi',
             blueContingent: 'DKI Jakarta',
+            blueCountry: 'IDN',
             redName: 'Budi Santoso',
             redContingent: 'Jawa Barat',
+            redCountry: 'IDN',
             roundDurationSec: 120,
             currentRound: 1,
             status: 'waiting',
@@ -624,6 +655,15 @@ export function useFirestoreSync({
     flushRtdbBackup,
   ]);
 
+  const retrySyncNow = useCallback(async () => {
+    if (!isBrowserOnline()) return;
+    if (isFirestoreActive && cloudArena) {
+      await flushPendingFirestoreOps(cloudArena.id);
+    } else if (rtdb && isRtdbBackupDirty(rtdbArenaId)) {
+      await flushRtdbBackup(rtdbArenaId);
+    }
+  }, [isFirestoreActive, cloudArena, rtdbArenaId, flushPendingFirestoreOps, flushRtdbBackup]);
+
   return {
     cloudArena,
     cloudMatches,
@@ -636,5 +676,6 @@ export function useFirestoreSync({
     setSyncError,
     flushRtdbBackup,
     flushPendingFirestoreOps,
+    retrySyncNow,
   };
 }

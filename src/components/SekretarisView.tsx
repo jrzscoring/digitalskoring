@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   Award,
   CalendarDays,
+  CheckCircle2,
   ChevronDown,
   ClipboardList,
   FileDown,
@@ -12,6 +14,7 @@ import {
   ListChecks,
   Maximize2,
   Minimize2,
+  RotateCcw,
   Search,
   Trophy,
   UserPlus,
@@ -20,7 +23,13 @@ import {
 } from 'lucide-react';
 import { useArena } from '../context/ArenaContext';
 import type { AppView } from '../types/silat';
-import { formatMatchScore, getJurusType, isJurusMatch } from '../utils/ipsiRules';
+import {
+  JURUS_JUDGE_COUNT_OPTIONS,
+  formatMatchScore,
+  getJurusJudgeCount,
+  getJurusType,
+  isJurusMatch,
+} from '../utils/ipsiRules';
 import { exportArenaSummaryPdf, exportMatchPdf } from '../utils/pdfExport';
 import {
   BaganBracketPanel,
@@ -85,6 +94,7 @@ function readAndResizeLogo(file: File): Promise<string> {
 
 export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const {
+    mode,
     syncError,
     arena,
     matches,
@@ -92,6 +102,8 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     getMatchEvents,
     updateArenaMeta,
     setActiveMatch,
+    setMatchJurusJudgeCount,
+    resetMatch,
   } = useArena();
 
   const [tournamentName, setTournamentName] = useState(arena.tournamentName);
@@ -105,6 +117,9 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const [showAllReadyModal, setShowAllReadyModal] = useState(false);
   const [readyModalSearch, setReadyModalSearch] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showResetMatchModal, setShowResetMatchModal] = useState(false);
+  const [isResettingMatch, setIsResettingMatch] = useState(false);
+  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
 
   const [activeSection, setActiveSection] = useState<SekretarisSection>('identitas');
   const [registrasiMenuOpen, setRegistrasiMenuOpen] = useState(false);
@@ -194,6 +209,9 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
         setRegistrasiMenuOpen(false);
         setLaporanMenuOpen(false);
         setShowAllReadyModal(false);
+        if (!isResettingMatch) {
+          setShowResetMatchModal(false);
+        }
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -262,6 +280,35 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
       // ignore invalid file
     } finally {
       e.target.value = '';
+    }
+  };
+
+  const activeMatchEvents = useMemo(
+    () => getMatchEvents(activeMatch.id),
+    [getMatchEvents, activeMatch.id]
+  );
+
+  const activeViolationsCount =
+    activeMatch.blueBinaan +
+    activeMatch.blueTeguran1 +
+    activeMatch.blueTeguran2 +
+    activeMatch.bluePeringatan +
+    activeMatch.redBinaan +
+    activeMatch.redTeguran1 +
+    activeMatch.redTeguran2 +
+    activeMatch.redPeringatan;
+
+  const handleConfirmResetMatch = async () => {
+    setIsResettingMatch(true);
+    try {
+      await resetMatch(activeMatch.id);
+      setShowResetMatchModal(false);
+      setResetSuccessMsg(
+        `${activeMatch.matchNumber} (${activeMatch.blueName} vs ${activeMatch.redName}) telah direset ke awal (Skor 0 - 0, Babak 1, Pelanggaran & Log kosong).`
+      );
+      window.setTimeout(() => setResetSuccessMsg(null), 5000);
+    } finally {
+      setIsResettingMatch(false);
     }
   };
 
@@ -512,7 +559,8 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
           <JadwalPertandinganPanel />
         ) : (
         <div className={`grid grid-cols-1 lg:grid-cols-2 items-start ${isFullscreen ? 'gap-3.5' : 'gap-5'}`}>
-          {/* Arena Info */}
+          {/* Kolom Kiri: Identitas Kejuaraan + Inisialisasi & Reset Pertandingan */}
+          <div className="space-y-5">
           <form onSubmit={handleSaveArena} className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-5 space-y-4">
             <h2 className="font-display text-xl font-bold text-yellow-300">Identitas Kejuaraan</h2>
 
@@ -654,6 +702,123 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </button>
             </div>
           </form>
+
+          {/* Inisialisasi & Reset Pertandingan */}
+          <section
+            aria-label="Inisialisasi dan Reset Pertandingan"
+            data-testid="sekretaris-reset-section"
+            className="rounded-2xl bg-[#0d051c]/90 border border-rose-500/50 p-5 space-y-3.5"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="w-5 h-5 text-rose-400 shrink-0" />
+                  <h2 className="font-display text-lg font-bold text-white leading-tight">
+                    Inisialisasi Pertandingan Baru
+                  </h2>
+                </div>
+                <p className="text-xs text-blue-200 leading-relaxed">
+                  Mengosongkan seluruh data skor, babak, timer, vote juri, dan pelanggaran partai aktif pada{' '}
+                  {mode === 'firebase' ? 'Firebase Firestore' : mode === 'rtdb' ? 'Firebase Realtime Database' : 'penyimpanan sinkronisasi'} untuk memulai pertandingan baru.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                data-testid="sekretaris-reset-pertandingan-btn"
+                onClick={() => setShowResetMatchModal(true)}
+                className="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 border border-rose-300/70 text-white text-xs sm:text-sm font-bold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer shadow-lg shadow-rose-950/50 transition-colors"
+              >
+                <RotateCcw className="w-4 h-4 shrink-0" />
+                <span>Reset Pertandingan</span>
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-black/60 border border-purple-700/50 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="px-2 py-0.5 rounded bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 font-mono font-bold shrink-0">
+                    {activeMatch.matchNumber}
+                  </span>
+                  <span className="font-semibold text-white truncate">
+                    {activeMatch.blueName} vs {activeMatch.redName}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-blue-200 shrink-0">
+                  {activeMatch.stage}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-purple-800/50 text-center">
+                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Skor Aktif</div>
+                  <div
+                    data-testid="sekretaris-active-score-summary"
+                    className="font-mono text-sm font-extrabold text-white tabular-nums"
+                  >
+                    {formatMatchScore(activeMatch, 'blue')} - {formatMatchScore(activeMatch, 'red')}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Babak</div>
+                  <div
+                    data-testid="sekretaris-active-round-summary"
+                    className="font-mono text-sm font-extrabold text-yellow-300 tabular-nums"
+                  >
+                    Babak {activeMatch.currentRound}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Pelanggaran / Log</div>
+                  <div
+                    data-testid="sekretaris-active-violations-summary"
+                    className="font-mono text-sm font-extrabold text-rose-300 tabular-nums"
+                  >
+                    {activeViolationsCount} / {activeMatchEvents.length}
+                  </div>
+                </div>
+              </div>
+
+              {isJurusMatch(activeMatch) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-purple-800/50">
+                  <div className="text-xs font-semibold text-yellow-300">
+                    Jumlah Juri Bertugas (Jurus {getJurusType(activeMatch)})
+                  </div>
+                  <select
+                    aria-label="Jumlah Juri Jurus Partai Aktif"
+                    data-testid="sekretaris-overview-jurus-judge-count"
+                    value={activeMatch.jurusJudgeCount ?? 3}
+                    disabled={activeMatch.status === 'finished'}
+                    onChange={(e) =>
+                      void setMatchJurusJudgeCount(activeMatch.id, Number(e.target.value))
+                    }
+                    className="min-h-[34px] px-2.5 py-1 rounded-lg bg-black/75 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300 disabled:opacity-50 cursor-pointer"
+                  >
+                    {!activeMatch.jurusJudgeCount && (
+                      <option value={3}>3 Juri (Awal — Pilih 4–10)</option>
+                    )}
+                    {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
+                      <option key={cnt} value={cnt}>
+                        {cnt} Juri
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {resetSuccessMsg && (
+              <div
+                role="status"
+                data-testid="sekretaris-reset-success-banner"
+                className="rounded-xl bg-emerald-950/85 border border-emerald-400/65 px-3 py-2 text-xs text-emerald-100 flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+                <span>{resetSuccessMsg}</span>
+              </div>
+            )}
+          </section>
+          </div>
 
           {/* Kolom Kanan: Histori Hasil Tanding + Daftar Partai Siap Bertanding */}
           <div className="space-y-6">
@@ -878,7 +1043,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                                 : 'bg-blue-900/85 text-blue-100'
                             }`}
                           >
-                            {isJurus ? `Jurus · ${getJurusType(m)}` : 'Tanding'}
+                            {isJurus ? `Jurus · ${getJurusType(m)} (${getJurusJudgeCount(m)} Juri)` : 'Tanding'}
                           </span>
                           <span className="text-white font-semibold shrink-0">{m.stage}</span>
                           {genderLabel && (
@@ -1066,6 +1231,76 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 className="min-h-[40px] px-5 py-2 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-500/60 text-xs font-bold text-white cursor-pointer"
               >
                 Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Reset Pertandingan */}
+      {showResetMatchModal && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Reset Pertandingan"
+          data-testid="sekretaris-reset-confirm-modal"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div className="max-w-md w-full rounded-2xl bg-[#110624] border-2 border-rose-500/80 p-5 sm:p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-600/20 border border-rose-400/60 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-300" />
+                </div>
+                <div>
+                  <h2 className="font-display text-lg font-bold text-white leading-tight">
+                    Reset Pertandingan?
+                  </h2>
+                  <p className="text-xs text-blue-200">
+                    {activeMatch.matchNumber} &middot; {activeMatch.blueName} vs {activeMatch.redName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isResettingMatch}
+                aria-label="Tutup Konfirmasi Reset Pertandingan"
+                onClick={() => setShowResetMatchModal(false)}
+                className="p-1.5 rounded-lg bg-black/60 hover:bg-purple-900/60 text-blue-200 hover:text-white cursor-pointer disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-black/60 border border-purple-800/60 p-3 text-xs text-slate-200 space-y-1.5 leading-relaxed">
+              <p>
+                Tindakan ini akan mengosongkan seluruh data partai aktif di Firebase sebagai inisialisasi awal pertandingan baru:
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5 text-blue-100">
+                <li>Skor Sudut Biru &amp; Sudut Merah direset menjadi <strong>0 - 0</strong></li>
+                <li>Babak dikembalikan ke <strong>Babak 1</strong> dengan timer penuh ({activeMatch.roundDurationSec} dtk)</li>
+                <li>Seluruh pelanggaran (Binaan, Teguran, Peringatan), jatuhan, vote juri, verifikasi, dan log event dihapus</li>
+              </ul>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={isResettingMatch}
+                onClick={() => setShowResetMatchModal(false)}
+                className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-white cursor-pointer disabled:opacity-40 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isResettingMatch}
+                data-testid="sekretaris-confirm-reset-btn"
+                onClick={() => void handleConfirmResetMatch()}
+                className="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 border border-rose-300/80 text-xs font-extrabold text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isResettingMatch ? 'animate-spin' : ''}`} />
+                <span>{isResettingMatch ? 'Mereset...' : 'Ya, Reset Pertandingan'}</span>
               </button>
             </div>
           </div>

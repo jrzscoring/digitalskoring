@@ -34,6 +34,8 @@ export interface OfflineBackupRecord {
 const BACKUP_KEY_PREFIX = 'silat_offline_backup_v1_';
 const SYNC_LOCK_KEY_PREFIX = 'silat_offline_sync_lock_v1_';
 const SYNC_LOCK_TTL_MS = 10000;
+const IDB_NAME = 'silat_offline_cache_v1';
+const IDB_STORE = 'arena_backups';
 
 export function getBackupStorageKey(arenaId: string): string {
   const safeId = arenaId.replace(/[^a-zA-Z0-9_-]/g, '-') || 'gelanggang-a';
@@ -42,6 +44,172 @@ export function getBackupStorageKey(arenaId: string): string {
 
 export function clonePayload(payload: LocalStorePayload): LocalStorePayload {
   return JSON.parse(JSON.stringify(payload)) as LocalStorePayload;
+}
+
+function compactPayloadForQuota(payload: LocalStorePayload, stripDataImages: boolean): LocalStorePayload {
+  const activeId = payload.arena?.activeMatchId;
+  const trimmedEvents: Record<string, MatchEvent[]> = {};
+  if (payload.eventsByMatch) {
+    for (const [mId, evList] of Object.entries(payload.eventsByMatch)) {
+      if (mId === activeId) {
+        trimmedEvents[mId] = Array.isArray(evList) ? evList.slice(0, 200) : [];
+      } else {
+        const matchObj = payload.matches?.find((m) => m.id === mId);
+        if (matchObj && matchObj.status !== 'finished') {
+          trimmedEvents[mId] = Array.isArray(evList) ? evList.slice(0, 50) : [];
+        }
+      }
+    }
+  }
+
+  const matches = (payload.matches || []).map((m) => {
+    if (!stripDataImages) return m;
+    return {
+      ...m,
+      ...(m.bluePhoto?.startsWith('data:image/') ? { bluePhoto: '' } : {}),
+      ...(m.redPhoto?.startsWith('data:image/') ? { redPhoto: '' } : {}),
+    };
+  });
+
+  const athletes = (payload.athletes || []).map((a) => {
+    if (!stripDataImages) return a;
+    return a.photo?.startsWith('data:image/') ? { ...a, photo: '' } : a;
+  });
+
+  const arena =
+    stripDataImages &&
+    (payload.arena?.logoLeft?.startsWith('data:image/') ||
+      payload.arena?.logoRight?.startsWith('data:image/'))
+      ? {
+          ...payload.arena,
+          ...(payload.arena.logoLeft?.startsWith('data:image/') ? { logoLeft: '' } : {}),
+          ...(payload.arena.logoRight?.startsWith('data:image/') ? { logoRight: '' } : {}),
+        }
+      : payload.arena;
+
+  return {
+    arena,
+    matches,
+    eventsByMatch: trimmedEvents,
+    athletes,
+    brackets: payload.brackets || [],
+  };
+}
+
+export function safeWriteLocalPayload(storageKey: string, payload: LocalStorePayload): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(payload));
+    return true;
+  } catch {
+    try {
+      const compact1 = compactPayloadForQuota(payload, false);
+      window.localStorage.setItem(storageKey, JSON.stringify(compact1));
+      return true;
+    } catch {
+      try {
+        const compact2 = compactPayloadForQuota(payload, true);
+        window.localStorage.setItem(storageKey, JSON.stringify(compact2));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+}
+
+function openOfflineIdb(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function mirrorRecordToIndexedDb(key: string, value: unknown): Promise<void> {
+  const db = await openOfflineIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // Ignore IDB failures in restricted browsing modes
+  } finally {
+    db.close();
+  }
+}
+
+export async function readRecordFromIndexedDb<T>(key: string): Promise<T | null> {
+  const db = await openOfflineIdb();
+  if (!db) return null;
+  try {
+    return await new Promise<T | null>((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve((req.result as T) ?? null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+export async function clearAllOfflineStorage(localStorageKey: string): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i);
+        if (!key) continue;
+        if (
+          key === localStorageKey ||
+          key.startsWith(BACKUP_KEY_PREFIX) ||
+          key.startsWith(SYNC_LOCK_KEY_PREFIX)
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+      for (const k of keysToRemove) {
+        window.localStorage.removeItem(k);
+      }
+    } catch {
+      // ignore storage access errors
+    }
+  }
+
+  const db = await openOfflineIdb();
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore IDB errors
+  } finally {
+    db.close();
+  }
 }
 
 export function readOfflineBackup(arenaId: string): OfflineBackupRecord | null {
@@ -68,12 +236,65 @@ export function readOfflineBackup(arenaId: string): OfflineBackupRecord | null {
   }
 }
 
+export function readLatestOfflineBackup(): OfflineBackupRecord | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    let best: OfflineBackupRecord | null = null;
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.startsWith(BACKUP_KEY_PREFIX)) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Partial<OfflineBackupRecord>;
+      if (!parsed?.payload?.arena || !Array.isArray(parsed.payload.matches) || parsed.payload.matches.length === 0) {
+        continue;
+      }
+      const record: OfflineBackupRecord = {
+        arenaId: parsed.arenaId || parsed.payload.arena.id,
+        targetBackend: parsed.targetBackend === 'firestore' ? 'firestore' : 'rtdb',
+        dirty: Boolean(parsed.dirty),
+        dirtySinceMs: typeof parsed.dirtySinceMs === 'number' ? parsed.dirtySinceMs : 0,
+        lastSyncedAtMs: typeof parsed.lastSyncedAtMs === 'number' ? parsed.lastSyncedAtMs : 0,
+        lastUpdatedAtMs: typeof parsed.lastUpdatedAtMs === 'number' ? parsed.lastUpdatedAtMs : 0,
+        payload: parsed.payload,
+        pendingFirestoreOps: Array.isArray(parsed.pendingFirestoreOps) ? parsed.pendingFirestoreOps : [],
+      };
+      if (!best || record.lastUpdatedAtMs > best.lastUpdatedAtMs) {
+        best = record;
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
 export function writeOfflineBackup(record: OfflineBackupRecord): void {
   if (typeof window === 'undefined' || !record.arenaId) return;
+  const key = getBackupStorageKey(record.arenaId);
+  void mirrorRecordToIndexedDb(key, record);
+
   try {
-    window.localStorage.setItem(getBackupStorageKey(record.arenaId), JSON.stringify(record));
+    window.localStorage.setItem(key, JSON.stringify(record));
   } catch {
-    // Ignore storage quota errors cleanly
+    // Quota fallback: prune old non-active finished match logs first, then large photo blobs if needed
+    try {
+      const compactRecord: OfflineBackupRecord = {
+        ...record,
+        payload: compactPayloadForQuota(record.payload, false),
+      };
+      window.localStorage.setItem(key, JSON.stringify(compactRecord));
+    } catch {
+      try {
+        const minimalRecord: OfflineBackupRecord = {
+          ...record,
+          payload: compactPayloadForQuota(record.payload, true),
+        };
+        window.localStorage.setItem(key, JSON.stringify(minimalRecord));
+      } catch {
+        // IndexedDB mirror still holds the full record if localStorage is completely full
+      }
+    }
   }
 }
 
@@ -324,9 +545,14 @@ export function isOfflineNetworkError(err: unknown): boolean {
     msg.includes('offline') ||
     msg.includes('network') ||
     msg.includes('failed to fetch') ||
+    msg.includes('load failed') ||
     msg.includes('unavailable') ||
     msg.includes('could not reach') ||
     msg.includes('timeout') ||
-    msg.includes('disconnected')
+    msg.includes('disconnected') ||
+    msg.includes('connection') ||
+    msg.includes('transport') ||
+    msg.includes('err_internet')
   );
 }
+

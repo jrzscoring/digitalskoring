@@ -2,12 +2,16 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { onAuthStateChanged, signInWithPopup, signOut as firebaseSignOut, type User } from 'firebase/auth';
 import { ref, set } from 'firebase/database';
 import {
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import {
@@ -18,14 +22,20 @@ import {
 } from '../hooks/useFirestoreSync';
 import { auth, db, googleProvider, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from '../lib/firebase';
 import {
+  clearAllOfflineStorage,
   clonePayload,
   enqueueFirestoreOp,
   getPendingFirestoreOps,
   isBrowserOnline,
   isOfflineNetworkError,
   isPermissionDeniedError,
+  isRtdbBackupDirty,
   markRtdbBackupSynced,
+  mirrorRecordToIndexedDb,
+  readLatestOfflineBackup,
   readOfflineBackup,
+  readRecordFromIndexedDb,
+  safeWriteLocalPayload,
   saveFirestoreSnapshotBackup,
   saveRtdbLocalBackup,
   type PendingFirestoreOp,
@@ -45,6 +55,7 @@ import type {
   JurusCategory,
   JurusCornerData,
   JurusJudgeCornerScore,
+  JurusJudgeId,
   JurusMatchState,
   JurusPenaltyType,
   MatchData,
@@ -70,12 +81,17 @@ import {
   formatJurusElapsedMs,
   formatJurusScore,
   formatMatchTime,
+  getJurusJudgeCount,
+  getJurusJudgeKey,
+  getJurusJudgeScore,
   getJurusType,
   getRemainingTimerMs,
+  hasJurusCornerActivity,
   isJurusMatch,
+  normalizeJurusJudgeCount,
   normalizeJurusType,
 } from '../utils/ipsiRules';
-import { playArenaGong, playConsensusChime } from '../utils/soundEffects';
+import { playArenaGong, playBreakBuzzer, playConsensusChime } from '../utils/soundEffects';
 
 const LOCAL_STORAGE_KEY = 'silat_ipsi2026_arena_v1';
 const BROADCAST_CHANNEL_NAME = 'silat_ipsi2026_sync_v1';
@@ -84,6 +100,22 @@ function clampStr(val: string, maxLen: number, fallback = '-'): string {
   const trimmed = val.trim();
   if (!trimmed) return fallback;
   return trimmed.slice(0, maxLen);
+}
+
+function findMatchingAthleteProfile(
+  name: string,
+  contingent: string,
+  athletesList: AthleteData[]
+): AthleteData | undefined {
+  const normName = name.trim().toLowerCase();
+  if (!normName || normName === 'bye' || normName === 'menunggu pemenang') return undefined;
+  const normCont = contingent.trim().toLowerCase();
+  const exact = athletesList.find(
+    (a) =>
+      a.name.trim().toLowerCase() === normName &&
+      (!normCont || normCont === '-' || a.contingent.trim().toLowerCase() === normCont)
+  );
+  return exact || athletesList.find((a) => a.name.trim().toLowerCase() === normName);
 }
 
 function isRealAthleteName(name?: string): boolean {
@@ -136,7 +168,8 @@ function buildMatchFromSlot(
   arenaId: string,
   ownerId: string,
   totalRounds: 1 | 2 | 3,
-  seedSuffix: string
+  seedSuffix: string,
+  athletesList: AthleteData[] = []
 ): MatchData {
   const matchId = sanitizeId(`partai-${Date.now().toString(36)}-${seedSuffix}`);
   const isJurus =
@@ -144,6 +177,8 @@ function buildMatchFromSlot(
     isJurusMatch({ weightClass: slot.weightClass });
   const durationSec = isJurus ? JURUS_DEFAULT_DURATION_SEC : 120;
   const resolvedRounds: 1 | 2 | 3 = isJurus ? 1 : totalRounds;
+  const blueProfile = findMatchingAthleteProfile(slot.blueName, slot.blueContingent || '', athletesList);
+  const redProfile = findMatchingAthleteProfile(slot.redName, slot.redContingent || '', athletesList);
 
   const base: MatchData = {
     id: matchId,
@@ -155,8 +190,12 @@ function buildMatchFromSlot(
     competitionCategory: isJurus ? 'Jurus' : 'Tanding',
     blueName: slot.blueName,
     blueContingent: slot.blueContingent || '-',
+    blueCountry: blueProfile?.country?.trim().slice(0, 64) || 'IDN',
+    ...(blueProfile?.photo?.trim() ? { bluePhoto: blueProfile.photo.trim().slice(0, 250000) } : {}),
     redName: slot.redName,
     redContingent: slot.redContingent || '-',
+    redCountry: redProfile?.country?.trim().slice(0, 64) || 'IDN',
+    ...(redProfile?.photo?.trim() ? { redPhoto: redProfile.photo.trim().slice(0, 250000) } : {}),
     roundDurationSec: durationSec,
     currentRound: 1,
     totalRounds: resolvedRounds,
@@ -198,7 +237,8 @@ function syncBracketOnWinner(
   finishedMatch: MatchData,
   winner: Corner,
   arenaId: string,
-  ownerId: string
+  ownerId: string,
+  athletesList: AthleteData[] = []
 ): {
   nextBrackets: BracketMatchSlot[];
   createdMatch: MatchData | null;
@@ -258,13 +298,27 @@ function syncBracketOnWinner(
         : undefined;
 
       if (existingNextMatch && existingNextMatch.status !== 'finished') {
+        const blueProfile = findMatchingAthleteProfile(
+          updatedNextSlot.blueName,
+          updatedNextSlot.blueContingent || '',
+          athletesList
+        );
+        const redProfile = findMatchingAthleteProfile(
+          updatedNextSlot.redName,
+          updatedNextSlot.redContingent || '',
+          athletesList
+        );
         updatedExistingMatch = {
           id: existingNextMatch.id,
           patch: {
             blueName: updatedNextSlot.blueName,
             blueContingent: updatedNextSlot.blueContingent || '-',
+            ...(blueProfile?.country ? { blueCountry: blueProfile.country.trim().slice(0, 64) } : {}),
+            ...(blueProfile?.photo !== undefined ? { bluePhoto: blueProfile.photo.trim().slice(0, 250000) } : {}),
             redName: updatedNextSlot.redName,
             redContingent: updatedNextSlot.redContingent || '-',
+            ...(redProfile?.country ? { redCountry: redProfile.country.trim().slice(0, 64) } : {}),
+            ...(redProfile?.photo !== undefined ? { redPhoto: redProfile.photo.trim().slice(0, 250000) } : {}),
           },
         };
       } else if (!existingNextMatch) {
@@ -277,7 +331,8 @@ function syncBracketOnWinner(
           arenaId,
           ownerId,
           rounds,
-          `adv-${Date.now().toString(36)}`
+          `adv-${Date.now().toString(36)}`,
+          athletesList
         );
         updatedNextSlot = { ...updatedNextSlot, matchId: createdMatch.id };
       }
@@ -308,8 +363,10 @@ function createDefaultSeed(): LocalStorePayload {
     stage: 'Final',
     blueName: 'Ahmad Fauzi',
     blueContingent: 'DKI Jakarta',
+    blueCountry: 'IDN',
     redName: 'Budi Santoso',
     redContingent: 'Jawa Barat',
+    redCountry: 'IDN',
     roundDurationSec: 120,
     currentRound: 1,
     totalRounds: 3,
@@ -367,8 +424,13 @@ function loadLocalStore(preferredArenaId?: string | null): LocalStorePayload {
     }
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!raw) {
+      const latestBackup = readLatestOfflineBackup();
+      if (latestBackup?.payload) {
+        safeWriteLocalPayload(LOCAL_STORAGE_KEY, latestBackup.payload);
+        return latestBackup.payload;
+      }
       const seed = createDefaultSeed();
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(seed));
+      safeWriteLocalPayload(LOCAL_STORAGE_KEY, seed);
       return seed;
     }
     const parsed = JSON.parse(raw) as LocalStorePayload;
@@ -387,11 +449,16 @@ export interface CreateMatchInput {
   stage: string;
   competitionCategory?: CompetitionCategory;
   jurusType?: JurusCategory;
+  jurusJudgeCount?: number;
   totalRounds?: 1 | 2 | 3;
   blueName: string;
   blueContingent: string;
+  blueCountry?: string;
+  bluePhoto?: string;
   redName: string;
   redContingent: string;
+  redCountry?: string;
+  redPhoto?: string;
   roundDurationSec: number;
   setAsActive?: boolean;
 }
@@ -408,6 +475,8 @@ export interface UpdateArenaMetaInput {
 export interface AddAthleteInput {
   name: string;
   contingent: string;
+  country?: string;
+  photo?: string;
   weightClass: string;
   gender: AthleteGender;
   ageCategory: AthleteAgeCategory;
@@ -431,6 +500,7 @@ interface ArenaContextValue {
   rtdbProjectId: string | null;
   isOnline: boolean;
   pendingSyncCount: number;
+  retrySyncNow: () => Promise<void>;
   user: User | null;
   authReady: boolean;
   syncError: string | null;
@@ -451,18 +521,28 @@ interface ArenaContextValue {
   updateMatchMeta: (matchId: string, input: Partial<CreateMatchInput>) => Promise<void>;
   setActiveMatch: (matchId: string) => Promise<void>;
   setMatchTotalRounds: (matchId: string, totalRounds: 2 | 3) => Promise<void>;
+  setMatchJurusJudgeCount: (matchId: string, judgeCount: number) => Promise<void>;
+  setMatchRoundDuration: (matchId: string, roundDurationSec: number) => Promise<void>;
   applyLotingMatchAssignments: (
     updates: Array<{
       matchId: string;
       blueName: string;
       blueContingent: string;
+      blueCountry?: string;
+      bluePhoto?: string;
       redName: string;
       redContingent: string;
+      redCountry?: string;
+      redPhoto?: string;
     }>
   ) => Promise<number>;
   deleteMatch: (matchId: string) => Promise<void>;
   resetMatch: (matchId: string) => Promise<void>;
+  resetSystem: () => Promise<void>;
+  exportArenaBackup: () => Promise<LocalStorePayload>;
+  importArenaBackup: (payload: LocalStorePayload) => Promise<void>;
   addAthlete: (input: AddAthleteInput) => Promise<void>;
+  updateAthlete: (athleteId: string, input: Partial<AddAthleteInput>) => Promise<void>;
   importAthletes: (inputs: AddAthleteInput[]) => Promise<number>;
   deleteAthlete: (athleteId: string) => Promise<void>;
   clearAthletes: () => Promise<void>;
@@ -474,6 +554,7 @@ interface ArenaContextValue {
   clearBracket: (weightClass: string, gender: AthleteGender) => Promise<void>;
   sendJudgeVote: (judgeId: JudgeId, corner: Corner, points: 1 | 2) => Promise<{ awarded: boolean }>;
   clearJudgeVote: (judgeId: JudgeId) => Promise<void>;
+  undoLastJudgeInput: (judgeId: JudgeId) => Promise<void>;
   triggerDewanAction: (action: DewanActionType, corner: Corner) => Promise<void>;
   startVerification: (kind: VerificationKind) => Promise<void>;
   castVerificationVote: (judgeId: JudgeId, choice: VerificationVoteChoice) => Promise<void>;
@@ -494,16 +575,19 @@ interface ArenaContextValue {
   resetTimer: () => Promise<void>;
   setRound: (round: number) => Promise<void>;
   startBreakTimer: (seconds?: number) => Promise<void>;
+  resumeBreakTimer: () => Promise<void>;
+  resetBreakTimer: () => Promise<void>;
+  toggleJuriLock: (locked?: boolean) => Promise<void>;
   setActivePerformerCorner: (corner: Corner) => Promise<void>;
-  recordJurusWrongMove: (judgeId: JudgeId, corner: Corner, delta: 1 | -1) => Promise<void>;
-  setJurusStaminaScore: (judgeId: JudgeId, corner: Corner, valueHundredths: number) => Promise<void>;
+  recordJurusWrongMove: (judgeId: JurusJudgeId, corner: Corner, delta: 1 | -1) => Promise<void>;
+  setJurusStaminaScore: (judgeId: JurusJudgeId, corner: Corner, valueHundredths: number) => Promise<void>;
   setJurusCreativeScore: (
-    judgeId: JudgeId,
+    judgeId: JurusJudgeId,
     corner: Corner,
     component: 'attackScore' | 'harmonyScore' | 'soulScore',
     valueHundredths: number
   ) => Promise<void>;
-  toggleJurusJudgeSubmit: (judgeId: JudgeId, corner: Corner) => Promise<void>;
+  toggleJurusJudgeSubmit: (judgeId: JurusJudgeId, corner: Corner) => Promise<void>;
   triggerJurusDewanPenalty: (
     corner: Corner,
     penaltyKey: JurusPenaltyType,
@@ -530,7 +614,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const channelRef = useRef<BroadcastChannel | null>(null);
   const gongFiredForRoundRef = useRef<string | null>(null);
   const autoFinishedMatchRef = useRef<string | null>(null);
+  const autoBreakMatchRef = useRef<string | null>(null);
   const autoAdjudicateRef = useRef<() => Promise<void>>(async () => {});
+  const startBreakTimerRef = useRef<(seconds?: number) => Promise<void>>(async () => {});
+  const pendingPenaltyKeysRef = useRef<Set<string>>(new Set());
+  const pendingJudgeUndoKeysRef = useRef<Set<string>>(new Set());
   const rtdbArenaId = joinedArenaId || localStore.arena.id || 'gelanggang-a';
 
   // Keep synchronous ref aligned with localStore
@@ -580,14 +668,38 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Hydrate full-fidelity IndexedDB mirror on startup if available and local store is empty/default
+  useEffect(() => {
+    let cancelled = false;
+    void readRecordFromIndexedDb<LocalStorePayload>(LOCAL_STORAGE_KEY).then((idbPayload) => {
+      if (cancelled || !idbPayload?.arena || !Array.isArray(idbPayload.matches) || idbPayload.matches.length === 0) {
+        return;
+      }
+      const current = localStoreRef.current;
+      const isStillDefaultSeed =
+        current.matches.length === 1 &&
+        current.matches[0]?.id === 'partai-01' &&
+        (current.athletes?.length || 0) === 0 &&
+        (current.eventsByMatch['partai-01']?.length || 0) === 0;
+      if (isStillDefaultSeed) {
+        localStoreRef.current = idbPayload;
+        setLocalStore(idbPayload);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const persistLocalMirror = useCallback((next: LocalStorePayload) => {
     localStoreRef.current = next;
     setLocalStore(next);
+    safeWriteLocalPayload(LOCAL_STORAGE_KEY, next);
+    void mirrorRecordToIndexedDb(LOCAL_STORAGE_KEY, next);
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next));
       channelRef.current?.postMessage({ type: 'SYNC_STATE', payload: next });
     } catch {
-      // ignore storage quota errors
+      // ignore broadcast channel errors
     }
   }, []);
 
@@ -622,6 +734,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     isOnline,
     syncError,
     setSyncError,
+    retrySyncNow,
   } = useFirestoreSync({
     user,
     authReady,
@@ -783,6 +896,13 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [commitLocalBackupOnly]
   );
 
+  const effectivePendingSyncCount =
+    mode === 'firebase'
+      ? pendingOpsCount
+      : isRtdbBackupDirty(rtdbArenaId)
+      ? Math.max(1, pendingOpsCount)
+      : pendingOpsCount;
+
   const useLocalFallbackForFirebase =
     mode === 'firebase' && (!isOnline || pendingOpsCount > 0 || !cloudArena);
 
@@ -828,7 +948,10 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setLiveTimerMs(getRemainingTimerMs(activeMatch));
-    if (activeMatch.status !== 'active' && activeMatch.status !== 'break') {
+    if (
+      (activeMatch.status !== 'active' && activeMatch.status !== 'break') ||
+      activeMatch.timerStartedAtMs <= 0
+    ) {
       return;
     }
 
@@ -839,7 +962,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       const roundKey = `${activeMatch.id}-r${activeMatch.currentRound}-${activeMatch.status}`;
       if (rem === 0 && gongFiredForRoundRef.current !== roundKey) {
         gongFiredForRoundRef.current = roundKey;
-        playArenaGong();
+        if (activeMatch.status === 'break') {
+          playBreakBuzzer();
+        } else {
+          playArenaGong();
+        }
 
         const totalRounds = activeMatch.totalRounds ?? 3;
         if (
@@ -850,6 +977,14 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         ) {
           autoFinishedMatchRef.current = `${activeMatch.id}-r${activeMatch.currentRound}`;
           void autoAdjudicateRef.current();
+        } else if (
+          !isJurusMatch(activeMatch) &&
+          activeMatch.status === 'active' &&
+          activeMatch.currentRound < totalRounds &&
+          autoBreakMatchRef.current !== `${activeMatch.id}-r${activeMatch.currentRound}`
+        ) {
+          autoBreakMatchRef.current = `${activeMatch.id}-r${activeMatch.currentRound}`;
+          void startBreakTimerRef.current(60);
         }
       }
     }, 100);
@@ -1060,14 +1195,21 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         ...(isJurus
           ? {
               jurusType: resolvedJurusType,
+              ...(typeof input.jurusJudgeCount === 'number'
+                ? { jurusJudgeCount: Math.min(10, Math.max(4, Math.round(input.jurusJudgeCount))) }
+                : {}),
               activePerformerCorner: 'blue' as Corner,
               jurusState: createInitialJurusState(),
             }
           : {}),
         blueName: clampStr(input.blueName, 80, 'Pesilat Biru'),
         blueContingent: clampStr(input.blueContingent, 80, 'Kontingen Biru'),
+        ...(input.blueCountry?.trim() ? { blueCountry: input.blueCountry.trim().slice(0, 64) } : { blueCountry: 'IDN' }),
+        ...(input.bluePhoto?.trim() ? { bluePhoto: input.bluePhoto.trim().slice(0, 250000) } : {}),
         redName: clampStr(input.redName, 80, 'Pesilat Merah'),
         redContingent: clampStr(input.redContingent, 80, 'Kontingen Merah'),
+        ...(input.redCountry?.trim() ? { redCountry: input.redCountry.trim().slice(0, 64) } : { redCountry: 'IDN' }),
+        ...(input.redPhoto?.trim() ? { redPhoto: input.redPhoto.trim().slice(0, 250000) } : {}),
         roundDurationSec: roundSec,
         currentRound: 1,
         totalRounds: resolvedTotalRounds,
@@ -1148,8 +1290,12 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         competitionCategory: nextCompCategory,
         blueName: input.blueName ? clampStr(input.blueName, 80) : target.blueName,
         blueContingent: input.blueContingent ? clampStr(input.blueContingent, 80) : target.blueContingent,
+        ...(input.blueCountry !== undefined ? { blueCountry: input.blueCountry.trim().slice(0, 64) } : {}),
+        ...(input.bluePhoto !== undefined ? { bluePhoto: input.bluePhoto.trim().slice(0, 250000) } : {}),
         redName: input.redName ? clampStr(input.redName, 80) : target.redName,
         redContingent: input.redContingent ? clampStr(input.redContingent, 80) : target.redContingent,
+        ...(input.redCountry !== undefined ? { redCountry: input.redCountry.trim().slice(0, 64) } : {}),
+        ...(input.redPhoto !== undefined ? { redPhoto: input.redPhoto.trim().slice(0, 250000) } : {}),
         roundDurationSec: roundSec,
         totalRounds: isJurus ? 1 : input.totalRounds ?? target.totalRounds ?? 3,
         timerRemainingMs:
@@ -1158,6 +1304,9 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
       if (isJurus) {
         patch.jurusType = input.jurusType || target.jurusType || normalizeJurusType(patch.weightClass);
+        if (typeof input.jurusJudgeCount === 'number') {
+          patch.jurusJudgeCount = Math.min(10, Math.max(4, Math.round(input.jurusJudgeCount)));
+        }
         patch.activePerformerCorner = target.activePerformerCorner || 'blue';
         patch.jurusState = target.jurusState || createInitialJurusState();
       }
@@ -1244,20 +1393,123 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
+  const setMatchJurusJudgeCount = useCallback(
+    async (matchId: string, judgeCount: number) => {
+      const target = matches.find((m) => m.id === matchId);
+      if (!target || target.status === 'finished') return;
+      const safeCount = Math.min(10, Math.max(4, Math.round(judgeCount)));
+      const patch: Partial<MatchData> = {
+        jurusJudgeCount: safeCount,
+      };
+      if (isJurusMatch(target)) {
+        const jurusType = getJurusType(target);
+        const jState = ensureJurusState(target);
+        const blueSummary = computeCornerJurusSummary(jurusType, jState.blue, safeCount);
+        const redSummary = computeCornerJurusSummary(jurusType, jState.red, safeCount);
+        if (hasJurusCornerActivity(jState.blue) || target.blueScore > 0) {
+          patch.blueScore = blueSummary.finalScore;
+        }
+        if (hasJurusCornerActivity(jState.red) || target.redScore > 0) {
+          patch.redScore = redSummary.finalScore;
+        }
+      }
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => (m.id === matchId ? { ...m, ...patch } : m)),
+      });
+      if (mode === 'firebase' && cloudArena) {
+        await executeFirestoreWithFallback(
+          cloudArena.id,
+          [
+            {
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+              data: { ...patch },
+              timestampMode: 'update',
+            },
+          ],
+          localUpdater
+        );
+      } else {
+        commitLocalStore(localUpdater);
+      }
+    },
+    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+  );
+
+  const setMatchRoundDuration = useCallback(
+    async (matchId: string, roundDurationSec: number) => {
+      const target = matches.find((m) => m.id === matchId);
+      if (!target || target.status === 'finished') return;
+      const safeSec = Math.min(300, Math.max(30, Math.round(roundDurationSec)));
+      const shouldResetClock = target.status === 'waiting' || target.status === 'paused';
+      const patch: Partial<MatchData> = shouldResetClock
+        ? {
+            roundDurationSec: safeSec,
+            status: 'waiting',
+            timerRemainingMs: safeSec * 1000,
+            timerStartedAtMs: 0,
+          }
+        : {
+            roundDurationSec: safeSec,
+          };
+
+      if (shouldResetClock) {
+        gongFiredForRoundRef.current = null;
+      }
+
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => (m.id === matchId ? { ...m, ...patch } : m)),
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        await executeFirestoreWithFallback(
+          cloudArena.id,
+          [
+            {
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+              data: { ...patch },
+              timestampMode: 'update',
+            },
+          ],
+          localUpdater
+        );
+      } else {
+        commitLocalStore(localUpdater);
+      }
+    },
+    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+  );
+
   const applyLotingMatchAssignments = useCallback(
     async (
       updates: Array<{
         matchId: string;
         blueName: string;
         blueContingent: string;
+        blueCountry?: string;
+        bluePhoto?: string;
         redName: string;
         redContingent: string;
+        redCountry?: string;
+        redPhoto?: string;
       }>
     ): Promise<number> => {
       if (updates.length === 0) return 0;
       const normalizedMap = new Map<
         string,
-        { blueName: string; blueContingent: string; redName: string; redContingent: string }
+        {
+          blueName: string;
+          blueContingent: string;
+          blueCountry: string;
+          bluePhoto: string;
+          redName: string;
+          redContingent: string;
+          redCountry: string;
+          redPhoto: string;
+        }
       >();
 
       for (const u of updates) {
@@ -1267,17 +1519,48 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         const nextBlueCont = clampStr(u.blueContingent, 80, existing.blueContingent);
         const nextRedName = clampStr(u.redName, 80, existing.redName);
         const nextRedCont = clampStr(u.redContingent, 80, existing.redContingent);
+
+        const blueProfile = findMatchingAthleteProfile(nextBlueName, nextBlueCont, athletes);
+        const redProfile = findMatchingAthleteProfile(nextRedName, nextRedCont, athletes);
+
+        const nextBlueCountry =
+          u.blueCountry?.trim().slice(0, 64) ||
+          blueProfile?.country?.trim().slice(0, 64) ||
+          existing.blueCountry ||
+          'IDN';
+        const nextBluePhoto =
+          (u.bluePhoto !== undefined ? u.bluePhoto : blueProfile?.photo ?? existing.bluePhoto ?? '')
+            .trim()
+            .slice(0, 250000);
+        const nextRedCountry =
+          u.redCountry?.trim().slice(0, 64) ||
+          redProfile?.country?.trim().slice(0, 64) ||
+          existing.redCountry ||
+          'IDN';
+        const nextRedPhoto =
+          (u.redPhoto !== undefined ? u.redPhoto : redProfile?.photo ?? existing.redPhoto ?? '')
+            .trim()
+            .slice(0, 250000);
+
         if (
           nextBlueName !== existing.blueName ||
           nextBlueCont !== existing.blueContingent ||
+          nextBlueCountry !== (existing.blueCountry || 'IDN') ||
+          nextBluePhoto !== (existing.bluePhoto || '') ||
           nextRedName !== existing.redName ||
-          nextRedCont !== existing.redContingent
+          nextRedCont !== existing.redContingent ||
+          nextRedCountry !== (existing.redCountry || 'IDN') ||
+          nextRedPhoto !== (existing.redPhoto || '')
         ) {
           normalizedMap.set(u.matchId, {
             blueName: nextBlueName,
             blueContingent: nextBlueCont,
+            blueCountry: nextBlueCountry,
+            bluePhoto: nextBluePhoto,
             redName: nextRedName,
             redContingent: nextRedCont,
+            redCountry: nextRedCountry,
+            redPhoto: nextRedPhoto,
           });
         }
       }
@@ -1293,7 +1576,15 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         brackets: (prev.brackets || []).map((b) => {
           if (!b.matchId || b.winnerSide) return b;
           const patch = normalizedMap.get(b.matchId);
-          return patch ? { ...b, ...patch } : b;
+          return patch
+            ? {
+                ...b,
+                blueName: patch.blueName,
+                blueContingent: patch.blueContingent,
+                redName: patch.redName,
+                redContingent: patch.redContingent,
+              }
+            : b;
         }),
       });
 
@@ -1314,7 +1605,12 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             ops.push({
               opType: 'update',
               pathSegments: ['arenas', cloudArena.id, 'brackets', slot.id],
-              data: { ...patch },
+              data: {
+                blueName: patch.blueName,
+                blueContingent: patch.blueContingent,
+                redName: patch.redName,
+                redContingent: patch.redContingent,
+              },
               timestampMode: 'update',
             });
           }
@@ -1326,7 +1622,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
       return normalizedMap.size;
     },
-    [matches, brackets, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+    [matches, athletes, brackets, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
   const deleteMatch = useCallback(
@@ -1395,6 +1691,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         judge1Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
         judge2Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
         judge3Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
+        verification: createVerificationState('jatuhan', false, 0),
+        juriLocked: false,
         winner: '' as const,
         winMethod: '',
         finishedAtMs: 0,
@@ -1407,6 +1705,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       };
       gongFiredForRoundRef.current = null;
       autoFinishedMatchRef.current = null;
+      autoBreakMatchRef.current = null;
 
       const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
         ...prev,
@@ -1415,23 +1714,641 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (mode === 'firebase' && cloudArena) {
-        await executeFirestoreWithFallback(
-          cloudArena.id,
-          [
-            {
-              opType: 'update',
-              pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
-              data: { ...resetPatch },
-              timestampMode: 'update',
-            },
-          ],
-          localUpdater
-        );
+        const eventIdsToDelete = new Set<string>();
+        for (const ev of localStoreRef.current.eventsByMatch[matchId] || []) {
+          if (ev.id) eventIdsToDelete.add(ev.id);
+        }
+        if (matchId === activeMatch.id) {
+          for (const ev of cloudEvents) {
+            if (ev.id) eventIdsToDelete.add(ev.id);
+          }
+        }
+
+        const eventsPath = `arenas/${cloudArena.id}/matches/${matchId}/events`;
+        if (isBrowserOnline()) {
+          try {
+            const eventsQuery = query(
+              collection(db, 'arenas', cloudArena.id, 'matches', matchId, 'events'),
+              where('ownerId', '==', cloudArena.ownerId)
+            );
+            const snap = await getDocs(eventsQuery);
+            snap.forEach((docSnap) => {
+              eventIdsToDelete.add(docSnap.id);
+            });
+          } catch (err) {
+            if (!isOfflineNetworkError(err)) {
+              handleFirestoreError(err, OperationType.LIST, eventsPath);
+            }
+          }
+        }
+
+        const matchUpdateOp: QueuedOpInput = {
+          opType: 'update',
+          pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+          data: { ...resetPatch },
+          timestampMode: 'update',
+        };
+        const deleteEventOps: QueuedOpInput[] = Array.from(eventIdsToDelete).map((evId) => ({
+          opType: 'delete',
+          pathSegments: ['arenas', cloudArena.id, 'matches', matchId, 'events', evId],
+          timestampMode: 'none',
+        }));
+
+        await executeFirestoreWithFallback(cloudArena.id, [matchUpdateOp], localUpdater);
+        if (deleteEventOps.length > 0) {
+          await executeFirestoreWithFallback(cloudArena.id, deleteEventOps, (prev) => ({
+            ...prev,
+            eventsByMatch: { ...prev.eventsByMatch, [matchId]: [] },
+          }));
+        }
       } else {
         commitLocalStore(localUpdater);
       }
     },
-    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+    [
+      matches,
+      mode,
+      cloudArena,
+      activeMatch.id,
+      cloudEvents,
+      commitLocalStore,
+      executeFirestoreWithFallback,
+    ]
+  );
+
+  const resetSystem = useCallback(async () => {
+    const targetArenaId = cloudArena?.id || arena.id || 'gelanggang-a';
+    const targetOwnerId = cloudArena?.ownerId || arena.ownerId || 'local-operator';
+    const defaultArenaLabel = targetArenaId.startsWith('gelanggang-')
+      ? `Gelanggang ${targetArenaId.replace('gelanggang-', '').toUpperCase()}`
+      : 'Gelanggang A';
+
+    const baseSeed = createDefaultSeed();
+    const freshSeed: LocalStorePayload = {
+      arena: {
+        ...baseSeed.arena,
+        id: targetArenaId,
+        name: defaultArenaLabel,
+        ownerId: targetOwnerId,
+      },
+      matches: baseSeed.matches.map((m) => ({
+        ...m,
+        arenaId: targetArenaId,
+        ownerId: targetOwnerId,
+      })),
+      eventsByMatch: {
+        [baseSeed.matches[0].id]: [],
+      },
+      athletes: [],
+      brackets: [],
+    };
+
+    gongFiredForRoundRef.current = null;
+    autoFinishedMatchRef.current = null;
+    autoBreakMatchRef.current = null;
+    pendingPenaltyKeysRef.current.clear();
+    pendingJudgeUndoKeysRef.current.clear();
+
+    await clearAllOfflineStorage(LOCAL_STORAGE_KEY);
+
+    if (mode === 'firebase' && cloudArena) {
+      const athleteIds = new Set<string>(athletes.map((a) => a.id).filter(Boolean));
+      const bracketIds = new Set<string>(brackets.map((b) => b.id).filter(Boolean));
+      const matchIds = new Set<string>(matches.map((m) => m.id).filter(Boolean));
+      matchIds.add(freshSeed.matches[0].id);
+
+      const eventIdsByMatch = new Map<string, Set<string>>();
+      const addEventId = (mId: string, evId: string) => {
+        if (!mId || !evId) return;
+        const setForMatch = eventIdsByMatch.get(mId) || new Set<string>();
+        setForMatch.add(evId);
+        eventIdsByMatch.set(mId, setForMatch);
+      };
+      for (const [mId, list] of Object.entries(localStoreRef.current.eventsByMatch || {})) {
+        for (const ev of list || []) {
+          if (ev.id) addEventId(mId, ev.id);
+        }
+      }
+      for (const ev of cloudEvents) {
+        if (ev.id) addEventId(activeMatch.id, ev.id);
+      }
+
+      if (isBrowserOnline()) {
+        try {
+          const [athSnap, brkSnap, matchSnap] = await Promise.all([
+            getDocs(
+              query(
+                collection(db, 'arenas', cloudArena.id, 'athletes'),
+                where('ownerId', '==', cloudArena.ownerId)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, 'arenas', cloudArena.id, 'brackets'),
+                where('ownerId', '==', cloudArena.ownerId)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, 'arenas', cloudArena.id, 'matches'),
+                where('ownerId', '==', cloudArena.ownerId)
+              )
+            ),
+          ]);
+          athSnap.forEach((d) => athleteIds.add(d.id));
+          brkSnap.forEach((d) => bracketIds.add(d.id));
+          matchSnap.forEach((d) => matchIds.add(d.id));
+
+          await Promise.all(
+            Array.from(matchIds).map(async (mId) => {
+              const evSnap = await getDocs(
+                query(
+                  collection(db, 'arenas', cloudArena.id, 'matches', mId, 'events'),
+                  where('ownerId', '==', cloudArena.ownerId)
+                )
+              );
+              evSnap.forEach((d) => addEventId(mId, d.id));
+            })
+          );
+        } catch (err) {
+          if (!isOfflineNetworkError(err)) {
+            handleFirestoreError(err, OperationType.LIST, `arenas/${cloudArena.id}`);
+          }
+        }
+      }
+
+      const deleteOps: QueuedOpInput[] = [];
+      for (const [mId, evSet] of eventIdsByMatch.entries()) {
+        for (const evId of evSet) {
+          deleteOps.push({
+            opType: 'delete',
+            pathSegments: ['arenas', cloudArena.id, 'matches', mId, 'events', evId],
+            timestampMode: 'none',
+          });
+        }
+      }
+      for (const aId of athleteIds) {
+        deleteOps.push({
+          opType: 'delete',
+          pathSegments: ['arenas', cloudArena.id, 'athletes', aId],
+          timestampMode: 'none',
+        });
+      }
+      for (const bId of bracketIds) {
+        deleteOps.push({
+          opType: 'delete',
+          pathSegments: ['arenas', cloudArena.id, 'brackets', bId],
+          timestampMode: 'none',
+        });
+      }
+      for (const mId of matchIds) {
+        deleteOps.push({
+          opType: 'delete',
+          pathSegments: ['arenas', cloudArena.id, 'matches', mId],
+          timestampMode: 'none',
+        });
+      }
+
+      const localResetUpdater = () => freshSeed;
+      if (deleteOps.length > 0) {
+        await executeFirestoreWithFallback(cloudArena.id, deleteOps, localResetUpdater);
+      }
+
+      const seedMatch = freshSeed.matches[0];
+      await executeFirestoreWithFallback(
+        cloudArena.id,
+        [
+          {
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id],
+            data: {
+              name: freshSeed.arena.name,
+              tournamentName: freshSeed.arena.tournamentName,
+              venue: '',
+              eventDate: '',
+              logoLeft: '',
+              logoRight: '',
+              activeMatchId: freshSeed.arena.activeMatchId,
+            },
+            timestampMode: 'update',
+          },
+          {
+            opType: 'set',
+            pathSegments: ['arenas', cloudArena.id, 'matches', seedMatch.id],
+            data: { ...seedMatch },
+            timestampMode: 'create',
+          },
+        ],
+        localResetUpdater
+      );
+    } else {
+      commitLocalStore(() => freshSeed);
+    }
+  }, [
+    cloudArena,
+    arena.id,
+    arena.ownerId,
+    mode,
+    athletes,
+    brackets,
+    matches,
+    cloudEvents,
+    activeMatch.id,
+    commitLocalStore,
+    executeFirestoreWithFallback,
+  ]);
+
+  const exportArenaBackup = useCallback(async (): Promise<LocalStorePayload> => {
+    const mergedEvents: Record<string, MatchEvent[]> = {};
+    for (const [mId, list] of Object.entries(localStoreRef.current.eventsByMatch || {})) {
+      mergedEvents[mId] = Array.isArray(list) ? [...list] : [];
+    }
+
+    if (mode === 'firebase' && cloudArena) {
+      mergedEvents[activeMatch.id] = [...cloudEvents];
+      if (isBrowserOnline()) {
+        await Promise.all(
+          matches.map(async (m) => {
+            if (m.id === activeMatch.id) return;
+            try {
+              const evSnap = await getDocs(
+                query(
+                  collection(db, 'arenas', cloudArena.id, 'matches', m.id, 'events'),
+                  where('ownerId', '==', cloudArena.ownerId)
+                )
+              );
+              const fetched = evSnap.docs.map((d) => d.data() as MatchEvent);
+              if (fetched.length > 0 || !mergedEvents[m.id]) {
+                mergedEvents[m.id] = fetched;
+              }
+            } catch {
+              // keep cached events if offline or query skipped
+            }
+          })
+        );
+      }
+    }
+
+    return clonePayload({
+      arena: { ...arena },
+      matches: matches.map((m) => ({ ...m })),
+      eventsByMatch: mergedEvents,
+      athletes: athletes.map((a) => ({ ...a })),
+      brackets: brackets.map((b) => ({ ...b })),
+    });
+  }, [mode, cloudArena, activeMatch.id, cloudEvents, matches, arena, athletes, brackets]);
+
+  const importArenaBackup = useCallback(
+    async (rawPayload: LocalStorePayload) => {
+      const targetArenaId = cloudArena?.id || arena.id || 'gelanggang-a';
+      const targetOwnerId = cloudArena?.ownerId || arena.ownerId || 'local-operator';
+
+      const sourceMatches =
+        Array.isArray(rawPayload.matches) && rawPayload.matches.length > 0
+          ? rawPayload.matches
+          : createDefaultSeed().matches;
+
+      const matchIdMap = new Map<string, string>();
+      const normalizedMatches: MatchData[] = sourceMatches.map((m, idx) => {
+        const safeMatchId = sanitizeId(m.id || `partai-${String(idx + 1).padStart(2, '0')}`);
+        matchIdMap.set(m.id, safeMatchId);
+        const safeDuration = Math.min(300, Math.max(30, Math.round(Number(m.roundDurationSec) || 120)));
+        const safeRound = Math.min(3, Math.max(1, Math.round(Number(m.currentRound) || 1)));
+        const safeTotalRounds = m.totalRounds === 1 || m.totalRounds === 2 || m.totalRounds === 3 ? m.totalRounds : 3;
+        const safeStatus: MatchStatus =
+          m.status === 'active' || m.status === 'paused' || m.status === 'break' || m.status === 'finished'
+            ? m.status
+            : 'waiting';
+        const safeWinner: Corner | 'draw' | '' =
+          m.winner === 'blue' || m.winner === 'red' || m.winner === 'draw' ? m.winner : '';
+
+        return {
+          ...m,
+          id: safeMatchId,
+          arenaId: targetArenaId,
+          ownerId: targetOwnerId,
+          matchNumber: clampStr(m.matchNumber || `Partai ${String(idx + 1).padStart(2, '0')}`, 32, `Partai ${idx + 1}`),
+          weightClass: clampStr(m.weightClass || 'Kelas Bebas', 80, 'Kelas Bebas'),
+          stage: clampStr(m.stage || 'Babak Penyisihan', 40, 'Babak Penyisihan'),
+          blueName: clampStr(m.blueName || 'Sudut Biru', 80, 'Sudut Biru'),
+          blueContingent: clampStr(m.blueContingent || '-', 80, '-'),
+          redName: clampStr(m.redName || 'Sudut Merah', 80, 'Sudut Merah'),
+          redContingent: clampStr(m.redContingent || '-', 80, '-'),
+          roundDurationSec: safeDuration,
+          currentRound: safeRound,
+          totalRounds: safeTotalRounds,
+          ...(typeof m.jurusJudgeCount === 'number'
+            ? { jurusJudgeCount: normalizeJurusJudgeCount(m.jurusJudgeCount) }
+            : {}),
+          status: safeStatus,
+          timerRemainingMs: Math.min(600000, Math.max(0, Math.round(Number(m.timerRemainingMs) || 0))),
+          timerStartedAtMs: Math.max(0, Math.round(Number(m.timerStartedAtMs) || 0)),
+          blueScore: Math.min(1500, Math.max(-100, Math.round(Number(m.blueScore) || 0))),
+          redScore: Math.min(1500, Math.max(-100, Math.round(Number(m.redScore) || 0))),
+          bluePunches: Math.min(999, Math.max(0, Math.round(Number(m.bluePunches) || 0))),
+          blueKicks: Math.min(999, Math.max(0, Math.round(Number(m.blueKicks) || 0))),
+          blueFalls: Math.min(99, Math.max(0, Math.round(Number(m.blueFalls) || 0))),
+          blueBinaan: Math.min(20, Math.max(0, Math.round(Number(m.blueBinaan) || 0))),
+          blueTeguran1: Math.min(20, Math.max(0, Math.round(Number(m.blueTeguran1) || 0))),
+          blueTeguran2: Math.min(20, Math.max(0, Math.round(Number(m.blueTeguran2) || 0))),
+          bluePeringatan: Math.min(3, Math.max(0, Math.round(Number(m.bluePeringatan) || 0))),
+          redPunches: Math.min(999, Math.max(0, Math.round(Number(m.redPunches) || 0))),
+          redKicks: Math.min(999, Math.max(0, Math.round(Number(m.redKicks) || 0))),
+          redFalls: Math.min(99, Math.max(0, Math.round(Number(m.redFalls) || 0))),
+          redBinaan: Math.min(20, Math.max(0, Math.round(Number(m.redBinaan) || 0))),
+          redTeguran1: Math.min(20, Math.max(0, Math.round(Number(m.redTeguran1) || 0))),
+          redTeguran2: Math.min(20, Math.max(0, Math.round(Number(m.redTeguran2) || 0))),
+          redPeringatan: Math.min(3, Math.max(0, Math.round(Number(m.redPeringatan) || 0))),
+          winner: safeWinner,
+          winMethod: (m.winMethod || '').slice(0, 64),
+        };
+      });
+
+      const mappedActiveMatchId =
+        (rawPayload.arena?.activeMatchId && matchIdMap.get(rawPayload.arena.activeMatchId)) ||
+        normalizedMatches[0].id;
+
+      const normalizedEventsByMatch: Record<string, MatchEvent[]> = {};
+      for (const m of normalizedMatches) {
+        normalizedEventsByMatch[m.id] = [];
+      }
+      if (rawPayload.eventsByMatch && typeof rawPayload.eventsByMatch === 'object') {
+        for (const [origMId, list] of Object.entries(rawPayload.eventsByMatch)) {
+          const targetMId = matchIdMap.get(origMId) || origMId;
+          if (!normalizedEventsByMatch[targetMId]) continue;
+          normalizedEventsByMatch[targetMId] = (list || []).map((ev, evIdx) => ({
+            id: sanitizeId(ev.id || `ev-${targetMId}-${evIdx}`),
+            arenaId: targetArenaId,
+            matchId: targetMId,
+            ownerId: targetOwnerId,
+            actorRole: clampStr(ev.actorRole || 'Sistem', 32, 'Sistem'),
+            corner: ev.corner === 'blue' || ev.corner === 'red' ? ev.corner : 'neutral',
+            type: clampStr(ev.type || 'info', 32, 'info'),
+            pointsDelta: Math.min(500, Math.max(-500, Math.round(Number(ev.pointsDelta) || 0))),
+            round: Math.min(3, Math.max(1, Math.round(Number(ev.round) || 1))),
+            matchTimeFormatted: clampStr(ev.matchTimeFormatted || '00:00', 16, '00:00'),
+            description: clampStr(ev.description || '-', 200, '-'),
+            undone: Boolean(ev.undone),
+            ...(typeof ev.createdAtMs === 'number' ? { createdAtMs: ev.createdAtMs } : {}),
+          }));
+        }
+      }
+
+      const normalizedAthletes: AthleteData[] = (rawPayload.athletes || []).map((ath, idx) => ({
+        ...ath,
+        id: sanitizeId(ath.id || `ath-${idx + 1}`),
+        arenaId: targetArenaId,
+        ownerId: targetOwnerId,
+        name: clampStr(ath.name || `Atlet ${idx + 1}`, 80, `Atlet ${idx + 1}`),
+        contingent: clampStr(ath.contingent || '-', 80, '-'),
+        weightClass: clampStr(ath.weightClass || 'Kelas A', 80, 'Kelas A'),
+        gender: ath.gender === 'Putri' ? 'Putri' : 'Putra',
+        ageCategory: ath.ageCategory || 'Dewasa',
+        competitionCategory: ath.competitionCategory === 'Jurus' ? 'Jurus' : 'Tanding',
+        gelanggang:
+          ath.gelanggang === 'B' || ath.gelanggang === 'C' || ath.gelanggang === 'D' ? ath.gelanggang : 'A',
+      }));
+
+      const normalizedBrackets: BracketMatchSlot[] = (rawPayload.brackets || []).map((slot, idx) => ({
+        ...slot,
+        id: sanitizeId(slot.id || `brk-${idx + 1}`),
+        arenaId: targetArenaId,
+        ownerId: targetOwnerId,
+        weightClass: clampStr(slot.weightClass || 'Kelas A', 80, 'Kelas A'),
+        gender: slot.gender === 'Putri' ? 'Putri' : 'Putra',
+        stage: clampStr(slot.stage || 'Babak Penyisihan', 40, 'Babak Penyisihan'),
+        blueName: (slot.blueName || '').slice(0, 80),
+        blueContingent: (slot.blueContingent || '').slice(0, 80),
+        redName: (slot.redName || '').slice(0, 80),
+        redContingent: (slot.redContingent || '').slice(0, 80),
+        ...(slot.matchId ? { matchId: matchIdMap.get(slot.matchId) || slot.matchId } : {}),
+      }));
+
+      const restoredPayload: LocalStorePayload = {
+        arena: {
+          id: targetArenaId,
+          name: clampStr(rawPayload.arena?.name || 'Gelanggang A', 80, 'Gelanggang A'),
+          tournamentName: clampStr(
+            rawPayload.arena?.tournamentName || 'Kejuaraan Nasional Pencak Silat IPSI 2026',
+            120,
+            'Kejuaraan Nasional Pencak Silat IPSI 2026'
+          ),
+          venue: (rawPayload.arena?.venue || '').slice(0, 120),
+          eventDate: (rawPayload.arena?.eventDate || '').slice(0, 80),
+          logoLeft: (rawPayload.arena?.logoLeft || '').slice(0, 250000),
+          logoRight: (rawPayload.arena?.logoRight || '').slice(0, 250000),
+          ownerId: targetOwnerId,
+          activeMatchId: mappedActiveMatchId,
+        },
+        matches: normalizedMatches,
+        eventsByMatch: normalizedEventsByMatch,
+        athletes: normalizedAthletes,
+        brackets: normalizedBrackets,
+      };
+
+      gongFiredForRoundRef.current = null;
+      autoFinishedMatchRef.current = null;
+      autoBreakMatchRef.current = null;
+      pendingPenaltyKeysRef.current.clear();
+      pendingJudgeUndoKeysRef.current.clear();
+
+      await clearAllOfflineStorage(LOCAL_STORAGE_KEY);
+
+      if (mode === 'firebase' && cloudArena) {
+        const existingAthleteIds = new Set<string>(athletes.map((a) => a.id).filter(Boolean));
+        const existingBracketIds = new Set<string>(brackets.map((b) => b.id).filter(Boolean));
+        const existingMatchIds = new Set<string>(matches.map((m) => m.id).filter(Boolean));
+        for (const m of normalizedMatches) existingMatchIds.add(m.id);
+
+        const existingEventIdsByMatch = new Map<string, Set<string>>();
+        const trackExistingEvent = (mId: string, evId: string) => {
+          if (!mId || !evId) return;
+          const s = existingEventIdsByMatch.get(mId) || new Set<string>();
+          s.add(evId);
+          existingEventIdsByMatch.set(mId, s);
+        };
+        for (const [mId, list] of Object.entries(localStoreRef.current.eventsByMatch || {})) {
+          for (const ev of list || []) {
+            if (ev.id) trackExistingEvent(mId, ev.id);
+          }
+        }
+        for (const ev of cloudEvents) {
+          if (ev.id) trackExistingEvent(activeMatch.id, ev.id);
+        }
+
+        if (isBrowserOnline()) {
+          try {
+            const [athSnap, brkSnap, matchSnap] = await Promise.all([
+              getDocs(
+                query(
+                  collection(db, 'arenas', cloudArena.id, 'athletes'),
+                  where('ownerId', '==', cloudArena.ownerId)
+                )
+              ),
+              getDocs(
+                query(
+                  collection(db, 'arenas', cloudArena.id, 'brackets'),
+                  where('ownerId', '==', cloudArena.ownerId)
+                )
+              ),
+              getDocs(
+                query(
+                  collection(db, 'arenas', cloudArena.id, 'matches'),
+                  where('ownerId', '==', cloudArena.ownerId)
+                )
+              ),
+            ]);
+            athSnap.forEach((d) => existingAthleteIds.add(d.id));
+            brkSnap.forEach((d) => existingBracketIds.add(d.id));
+            matchSnap.forEach((d) => existingMatchIds.add(d.id));
+
+            await Promise.all(
+              Array.from(existingMatchIds).map(async (mId) => {
+                const evSnap = await getDocs(
+                  query(
+                    collection(db, 'arenas', cloudArena.id, 'matches', mId, 'events'),
+                    where('ownerId', '==', cloudArena.ownerId)
+                  )
+                );
+                evSnap.forEach((d) => trackExistingEvent(mId, d.id));
+              })
+            );
+          } catch (err) {
+            if (!isOfflineNetworkError(err)) {
+              handleFirestoreError(err, OperationType.LIST, `arenas/${cloudArena.id}`);
+            }
+          }
+        }
+
+        const deleteOps: QueuedOpInput[] = [];
+        for (const [mId, evSet] of existingEventIdsByMatch.entries()) {
+          for (const evId of evSet) {
+            deleteOps.push({
+              opType: 'delete',
+              pathSegments: ['arenas', cloudArena.id, 'matches', mId, 'events', evId],
+              timestampMode: 'none',
+            });
+          }
+        }
+        for (const aId of existingAthleteIds) {
+          deleteOps.push({
+            opType: 'delete',
+            pathSegments: ['arenas', cloudArena.id, 'athletes', aId],
+            timestampMode: 'none',
+          });
+        }
+        for (const bId of existingBracketIds) {
+          deleteOps.push({
+            opType: 'delete',
+            pathSegments: ['arenas', cloudArena.id, 'brackets', bId],
+            timestampMode: 'none',
+          });
+        }
+        for (const mId of existingMatchIds) {
+          deleteOps.push({
+            opType: 'delete',
+            pathSegments: ['arenas', cloudArena.id, 'matches', mId],
+            timestampMode: 'none',
+          });
+        }
+
+        const applyRestoredLocal = () => restoredPayload;
+        if (deleteOps.length > 0) {
+          await executeFirestoreWithFallback(cloudArena.id, deleteOps, applyRestoredLocal);
+        }
+
+        const createOps: QueuedOpInput[] = [
+          {
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id],
+            data: {
+              name: restoredPayload.arena.name,
+              tournamentName: restoredPayload.arena.tournamentName,
+              venue: restoredPayload.arena.venue || '',
+              eventDate: restoredPayload.arena.eventDate || '',
+              logoLeft: restoredPayload.arena.logoLeft || '',
+              logoRight: restoredPayload.arena.logoRight || '',
+              activeMatchId: restoredPayload.arena.activeMatchId,
+            },
+            timestampMode: 'update',
+          },
+        ];
+
+        for (const m of normalizedMatches) {
+          const matchCopy = { ...m } as Record<string, unknown>;
+          delete matchCopy.createdAt;
+          delete matchCopy.updatedAt;
+          createOps.push({
+            opType: 'set',
+            pathSegments: ['arenas', cloudArena.id, 'matches', m.id],
+            data: matchCopy,
+            timestampMode: 'create',
+          });
+          for (const ev of normalizedEventsByMatch[m.id] || []) {
+            createOps.push({
+              opType: 'set',
+              pathSegments: ['arenas', cloudArena.id, 'matches', m.id, 'events', ev.id],
+              data: {
+                id: ev.id,
+                arenaId: cloudArena.id,
+                matchId: m.id,
+                ownerId: cloudArena.ownerId,
+                actorRole: ev.actorRole,
+                corner: ev.corner,
+                type: ev.type,
+                pointsDelta: ev.pointsDelta,
+                round: ev.round,
+                matchTimeFormatted: ev.matchTimeFormatted,
+                description: ev.description,
+                undone: Boolean(ev.undone),
+              },
+              timestampMode: 'createdAtOnly',
+            });
+          }
+        }
+
+        for (const ath of normalizedAthletes) {
+          const athCopy = { ...ath } as Record<string, unknown>;
+          delete athCopy.createdAt;
+          delete athCopy.createdAtMs;
+          createOps.push({
+            opType: 'set',
+            pathSegments: ['arenas', cloudArena.id, 'athletes', ath.id],
+            data: athCopy,
+            timestampMode: 'createdAtOnly',
+          });
+        }
+
+        for (const slot of normalizedBrackets) {
+          const slotCopy = { ...slot } as Record<string, unknown>;
+          delete slotCopy.createdAt;
+          delete slotCopy.updatedAt;
+          createOps.push({
+            opType: 'set',
+            pathSegments: ['arenas', cloudArena.id, 'brackets', slot.id],
+            data: slotCopy,
+            timestampMode: 'create',
+          });
+        }
+
+        await executeFirestoreWithFallback(cloudArena.id, createOps, applyRestoredLocal);
+      } else {
+        commitLocalStore(() => restoredPayload);
+      }
+    },
+    [
+      cloudArena,
+      arena.id,
+      arena.ownerId,
+      mode,
+      athletes,
+      brackets,
+      matches,
+      cloudEvents,
+      activeMatch.id,
+      commitLocalStore,
+      executeFirestoreWithFallback,
+    ]
   );
 
   const sendJudgeVote = useCallback(
@@ -1566,129 +2483,301 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [activeMatch, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
+  const undoLastJudgeInput = useCallback(
+    async (judgeId: JudgeId) => {
+      if (activeMatch.status === 'finished') return;
+
+      const lockKey = `${activeMatch.id}:${judgeId}`;
+      if (pendingJudgeUndoKeysRef.current.has(lockKey)) return;
+
+      const targetRole = `Juri ${judgeId}`;
+      const targetPressIndex = events.findIndex(
+        (e) => !e.undone && e.type === 'judge_press' && e.actorRole === targetRole
+      );
+      if (targetPressIndex === -1) return;
+
+      pendingJudgeUndoKeysRef.current.add(lockKey);
+      try {
+        const targetPress = events[targetPressIndex];
+        const pressPoints: 1 | 2 = targetPress.description === 'T' ? 2 : 1;
+        const pressCorner =
+          targetPress.corner === 'blue' || targetPress.corner === 'red' ? targetPress.corner : null;
+
+        let linkedConsensus: MatchEvent | null = null;
+        if (pressCorner) {
+          const judgeTagRegex = new RegExp(`\\bJ${judgeId}\\b`);
+          for (let i = targetPressIndex - 1; i >= 0; i--) {
+            const candidate = events[i];
+            if (
+              !candidate.undone &&
+              (candidate.type === 'punch' || candidate.type === 'kick') &&
+              candidate.corner === pressCorner &&
+              candidate.round === targetPress.round &&
+              candidate.pointsDelta === pressPoints &&
+              judgeTagRegex.test(candidate.actorRole)
+            ) {
+              const judgeTags = candidate.actorRole.match(/\bJ[123]\b/g) || [];
+              if (judgeTags.length - 1 < 2) {
+                linkedConsensus = candidate;
+              }
+              break;
+            }
+          }
+        }
+
+        const patch: Partial<MatchData> = {};
+        const voteKey = judgeId === 1 ? 'judge1Vote' : judgeId === 2 ? 'judge2Vote' : 'judge3Vote';
+        const currentVote = activeMatch[voteKey];
+        if (
+          currentVote &&
+          currentVote.corner === pressCorner &&
+          currentVote.points === pressPoints &&
+          currentVote.round === targetPress.round
+        ) {
+          patch[voteKey] = {
+            corner: 'none',
+            points: 0,
+            timestampMs: 0,
+            round: activeMatch.currentRound,
+          };
+        }
+
+        if (linkedConsensus && pressCorner) {
+          const isBlue = pressCorner === 'blue';
+          const scoreKey = isBlue ? 'blueScore' : 'redScore';
+          patch[scoreKey] = activeMatch[scoreKey] - linkedConsensus.pointsDelta;
+          if (linkedConsensus.type === 'punch') {
+            const punchKey = isBlue ? 'bluePunches' : 'redPunches';
+            patch[punchKey] = Math.max(0, activeMatch[punchKey] - 1);
+          } else {
+            const kickKey = isBlue ? 'blueKicks' : 'redKicks';
+            patch[kickKey] = Math.max(0, activeMatch[kickKey] - 1);
+          }
+        }
+
+        const undoneIds = new Set<string>([targetPress.id]);
+        if (linkedConsensus) {
+          undoneIds.add(linkedConsensus.id);
+        }
+
+        const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+          ...prev,
+          matches:
+            Object.keys(patch).length > 0
+              ? prev.matches.map((m) => (m.id === activeMatch.id ? { ...m, ...patch } : m))
+              : prev.matches,
+          eventsByMatch: {
+            ...prev.eventsByMatch,
+            [activeMatch.id]: (prev.eventsByMatch[activeMatch.id] || []).map((e) =>
+              undoneIds.has(e.id) ? { ...e, undone: true } : e
+            ),
+          },
+        });
+
+        if (mode === 'firebase' && cloudArena) {
+          const ops: QueuedOpInput[] = [];
+          if (Object.keys(patch).length > 0) {
+            ops.push({
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
+              data: { ...patch },
+              timestampMode: 'update',
+            });
+          }
+          for (const eventId of undoneIds) {
+            ops.push({
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id, 'events', eventId],
+              data: { undone: true },
+              timestampMode: 'none',
+            });
+          }
+          await executeFirestoreWithFallback(cloudArena.id, ops, localUpdater);
+        } else {
+          commitLocalStore(localUpdater);
+        }
+      } finally {
+        pendingJudgeUndoKeysRef.current.delete(lockKey);
+      }
+    },
+    [activeMatch, events, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+  );
+
   const triggerDewanAction = useCallback(
     async (action: DewanActionType, corner: Corner) => {
       if (activeMatch.status === 'finished') return;
-      const result = applyDewanAction(activeMatch, action, corner);
-      const timeStr = formatMatchTime(getRemainingTimerMs(activeMatch, Date.now()));
 
-      if (result.autoDisqualified) {
-        playArenaGong();
+      const isSingleUsePenalty =
+        action === 'binaan1' ||
+        action === 'binaan2' ||
+        action === 'teguran1' ||
+        action === 'teguran2' ||
+        action === 'peringatan1' ||
+        action === 'peringatan2';
+
+      const lockKey = `${activeMatch.id}:${corner}:${action}`;
+      if (isSingleUsePenalty) {
+        if (pendingPenaltyKeysRef.current.has(lockKey)) return;
+
+        const isBlue = corner === 'blue';
+        const binaanCount = isBlue ? activeMatch.blueBinaan : activeMatch.redBinaan;
+        const teguran1Count = isBlue ? activeMatch.blueTeguran1 : activeMatch.redTeguran1;
+        const teguran2Count = isBlue ? activeMatch.blueTeguran2 : activeMatch.redTeguran2;
+        const peringatanCount = isBlue ? activeMatch.bluePeringatan : activeMatch.redPeringatan;
+        const hasBinaanEvents = events.some(
+          (ev) => !ev.undone && ev.corner === corner && (ev.type === 'binaan1' || ev.type === 'binaan2' || ev.type === 'binaan')
+        );
+
+        const alreadyApplied =
+          (action === 'binaan1' &&
+            (hasBinaanEvents
+              ? events.some((ev) => !ev.undone && ev.corner === corner && (ev.type === 'binaan1' || ev.type === 'binaan'))
+              : binaanCount >= 1)) ||
+          (action === 'binaan2' &&
+            (hasBinaanEvents
+              ? events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'binaan2')
+              : binaanCount >= 2)) ||
+          (action === 'teguran1' &&
+            (teguran1Count > 0 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'teguran1'))) ||
+          (action === 'teguran2' &&
+            (teguran2Count > 0 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'teguran2'))) ||
+          (action === 'peringatan1' &&
+            (peringatanCount >= 1 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'peringatan1'))) ||
+          (action === 'peringatan2' &&
+            (peringatanCount >= 2 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'peringatan2')));
+
+        if (alreadyApplied) return;
+        pendingPenaltyKeysRef.current.add(lockKey);
       }
 
-      const finalPatch: Partial<MatchData> = result.autoDisqualified
-        ? { ...result.patch, finishedAtMs: Date.now() }
-        : result.patch;
+      try {
+        const result = applyDewanAction(activeMatch, action, corner);
+        const timeStr = formatMatchTime(getRemainingTimerMs(activeMatch, Date.now()));
 
-      const buildUpdatedPayload = (prev: LocalStorePayload): LocalStorePayload => {
-        const updatedMatchObj = { ...activeMatch, ...finalPatch };
-        const updatedMatchesBase = prev.matches.map((m) =>
-          m.id === activeMatch.id ? { ...m, ...finalPatch } : m
-        );
-        if (result.autoDisqualified && (result.patch.winner === 'blue' || result.patch.winner === 'red')) {
-          const syncRes = syncBracketOnWinner(
-            prev.brackets || [],
-            updatedMatchesBase,
-            updatedMatchObj,
-            result.patch.winner,
-            prev.arena.id,
-            user?.uid || prev.arena.ownerId
+        if (result.autoDisqualified) {
+          playArenaGong();
+        }
+
+        const finalPatch: Partial<MatchData> = result.autoDisqualified
+          ? { ...result.patch, finishedAtMs: Date.now() }
+          : result.patch;
+
+        const buildUpdatedPayload = (prev: LocalStorePayload): LocalStorePayload => {
+          const updatedMatchObj = { ...activeMatch, ...finalPatch };
+          const updatedMatchesBase = prev.matches.map((m) =>
+            m.id === activeMatch.id ? { ...m, ...finalPatch } : m
           );
-          let finalMatches = updatedMatchesBase;
-          if (syncRes.createdMatch) {
-            finalMatches = [...finalMatches, syncRes.createdMatch];
-          } else if (syncRes.updatedExistingMatch) {
-            finalMatches = finalMatches.map((m) =>
-              m.id === syncRes.updatedExistingMatch!.id
-                ? { ...m, ...syncRes.updatedExistingMatch!.patch }
-                : m
+          if (result.autoDisqualified && (result.patch.winner === 'blue' || result.patch.winner === 'red')) {
+            const syncRes = syncBracketOnWinner(
+              prev.brackets || [],
+              updatedMatchesBase,
+              updatedMatchObj,
+              result.patch.winner,
+              prev.arena.id,
+              user?.uid || prev.arena.ownerId,
+              prev.athletes || []
             );
+            let finalMatches = updatedMatchesBase;
+            if (syncRes.createdMatch) {
+              finalMatches = [...finalMatches, syncRes.createdMatch];
+            } else if (syncRes.updatedExistingMatch) {
+              finalMatches = finalMatches.map((m) =>
+                m.id === syncRes.updatedExistingMatch!.id
+                  ? { ...m, ...syncRes.updatedExistingMatch!.patch }
+                  : m
+              );
+            }
+            return {
+              ...prev,
+              matches: finalMatches,
+              brackets: syncRes.nextBrackets,
+              eventsByMatch: syncRes.createdMatch
+                ? { ...prev.eventsByMatch, [syncRes.createdMatch.id]: [] }
+                : prev.eventsByMatch,
+            };
           }
           return {
             ...prev,
-            matches: finalMatches,
-            brackets: syncRes.nextBrackets,
-            eventsByMatch: syncRes.createdMatch
-              ? { ...prev.eventsByMatch, [syncRes.createdMatch.id]: [] }
-              : prev.eventsByMatch,
+            matches: updatedMatchesBase,
           };
-        }
-        return {
-          ...prev,
-          matches: updatedMatchesBase,
         };
-      };
 
-      if (Object.keys(finalPatch).length > 0) {
-        if (mode === 'firebase' && cloudArena) {
-          const ops: QueuedOpInput[] = [
-            {
-              opType: 'update',
-              pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
-              data: { ...finalPatch },
-              timestampMode: 'update',
-            },
-          ];
-          if (result.autoDisqualified && (result.patch.winner === 'blue' || result.patch.winner === 'red')) {
-            const syncRes = syncBracketOnWinner(
-              brackets,
-              matches,
-              { ...activeMatch, ...finalPatch },
-              result.patch.winner,
-              cloudArena.id,
-              user?.uid || cloudArena.ownerId
-            );
-            for (const uSlot of syncRes.updatedSlots) {
-              ops.push({
+        if (Object.keys(finalPatch).length > 0) {
+          if (mode === 'firebase' && cloudArena) {
+            const ops: QueuedOpInput[] = [
+              {
                 opType: 'update',
-                pathSegments: ['arenas', cloudArena.id, 'brackets', uSlot.id],
-                data: {
-                  winnerSide: uSlot.winnerSide || '',
-                  winnerName: uSlot.winnerName || '',
-                  winnerContingent: uSlot.winnerContingent || '',
-                  blueName: uSlot.blueName,
-                  blueContingent: uSlot.blueContingent,
-                  redName: uSlot.redName,
-                  redContingent: uSlot.redContingent,
-                  matchId: uSlot.matchId || '',
-                },
+                pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
+                data: { ...finalPatch },
                 timestampMode: 'update',
-              });
+              },
+            ];
+            if (result.autoDisqualified && (result.patch.winner === 'blue' || result.patch.winner === 'red')) {
+              const syncRes = syncBracketOnWinner(
+                brackets,
+                matches,
+                { ...activeMatch, ...finalPatch },
+                result.patch.winner,
+                cloudArena.id,
+                user?.uid || cloudArena.ownerId,
+                athletes
+              );
+              for (const uSlot of syncRes.updatedSlots) {
+                ops.push({
+                  opType: 'update',
+                  pathSegments: ['arenas', cloudArena.id, 'brackets', uSlot.id],
+                  data: {
+                    winnerSide: uSlot.winnerSide || '',
+                    winnerName: uSlot.winnerName || '',
+                    winnerContingent: uSlot.winnerContingent || '',
+                    blueName: uSlot.blueName,
+                    blueContingent: uSlot.blueContingent,
+                    redName: uSlot.redName,
+                    redContingent: uSlot.redContingent,
+                    matchId: uSlot.matchId || '',
+                  },
+                  timestampMode: 'update',
+                });
+              }
+              if (syncRes.createdMatch) {
+                ops.push({
+                  opType: 'set',
+                  pathSegments: ['arenas', cloudArena.id, 'matches', syncRes.createdMatch.id],
+                  data: { ...syncRes.createdMatch },
+                  timestampMode: 'create',
+                });
+              } else if (syncRes.updatedExistingMatch) {
+                ops.push({
+                  opType: 'update',
+                  pathSegments: ['arenas', cloudArena.id, 'matches', syncRes.updatedExistingMatch.id],
+                  data: { ...syncRes.updatedExistingMatch.patch },
+                  timestampMode: 'update',
+                });
+              }
             }
-            if (syncRes.createdMatch) {
-              ops.push({
-                opType: 'set',
-                pathSegments: ['arenas', cloudArena.id, 'matches', syncRes.createdMatch.id],
-                data: { ...syncRes.createdMatch },
-                timestampMode: 'create',
-              });
-            } else if (syncRes.updatedExistingMatch) {
-              ops.push({
-                opType: 'update',
-                pathSegments: ['arenas', cloudArena.id, 'matches', syncRes.updatedExistingMatch.id],
-                data: { ...syncRes.updatedExistingMatch.patch },
-                timestampMode: 'update',
-              });
-            }
+            await executeFirestoreWithFallback(cloudArena.id, ops, buildUpdatedPayload);
+          } else {
+            commitLocalStore(buildUpdatedPayload);
           }
-          await executeFirestoreWithFallback(cloudArena.id, ops, buildUpdatedPayload);
-        } else {
-          commitLocalStore(buildUpdatedPayload);
+        }
+
+        await recordEvent(activeMatch.id, {
+          actorRole: 'Dewan / Wasit',
+          corner,
+          type: action,
+          pointsDelta: result.pointsDelta,
+          round: activeMatch.currentRound,
+          matchTimeFormatted: timeStr,
+          description: result.description,
+          undone: false,
+        });
+      } finally {
+        if (isSingleUsePenalty) {
+          pendingPenaltyKeysRef.current.delete(lockKey);
         }
       }
-
-      await recordEvent(activeMatch.id, {
-        actorRole: 'Dewan / Wasit',
-        corner,
-        type: action,
-        pointsDelta: result.pointsDelta,
-        round: activeMatch.currentRound,
-        matchTimeFormatted: timeStr,
-        description: result.description,
-        undone: false,
-      });
     },
-    [activeMatch, brackets, matches, mode, cloudArena, user, commitLocalStore, executeFirestoreWithFallback, recordEvent]
+    [activeMatch, events, brackets, matches, athletes, mode, cloudArena, user, commitLocalStore, executeFirestoreWithFallback, recordEvent]
   );
 
   const submitVerification = useCallback(
@@ -2008,7 +3097,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             updatedMatchObj,
             winner,
             prev.arena.id,
-            user?.uid || prev.arena.ownerId
+            user?.uid || prev.arena.ownerId,
+            prev.athletes || []
           );
           let finalMatches = updatedMatchesBase;
           if (syncRes.createdMatch) {
@@ -2051,7 +3141,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             { ...activeMatch, ...patch },
             winner,
             cloudArena.id,
-            user?.uid || cloudArena.ownerId
+            user?.uid || cloudArena.ownerId,
+            athletes
           );
           for (const uSlot of syncRes.updatedSlots) {
             ops.push({
@@ -2113,7 +3204,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         undone: false,
       });
     },
-    [activeMatch, brackets, matches, mode, cloudArena, user, commitLocalStore, executeFirestoreWithFallback, recordEvent]
+    [activeMatch, brackets, matches, athletes, mode, cloudArena, user, commitLocalStore, executeFirestoreWithFallback, recordEvent]
   );
 
   const autoAdjudicateWinner = useCallback(async () => {
@@ -2163,10 +3254,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const pauseTimer = useCallback(async () => {
     if (activeMatch.status !== 'active' && activeMatch.status !== 'break') return;
+    if (activeMatch.status === 'break' && activeMatch.timerStartedAtMs <= 0) return;
     const nowMs = Date.now();
     const rem = getRemainingTimerMs(activeMatch, nowMs);
     const patch: Partial<MatchData> = {
-      status: 'paused',
+      status: activeMatch.status === 'break' ? 'break' : 'paused',
       timerRemainingMs: rem,
       timerStartedAtMs: 0,
     };
@@ -2183,7 +3275,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         },
       };
       const jurusType = getJurusType(activeMatch);
-      const summary = computeCornerJurusSummary(jurusType, nextState[performer]);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
+      const summary = computeCornerJurusSummary(jurusType, nextState[performer], jurusJudgeCount);
       patch.jurusState = nextState;
       if (performer === 'blue') {
         patch.blueScore = summary.finalScore;
@@ -2221,6 +3314,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       status: 'waiting',
       timerRemainingMs: activeMatch.roundDurationSec * 1000,
       timerStartedAtMs: 0,
+      juriLocked: false,
     };
     if (isJurusMatch(activeMatch)) {
       const performer: Corner = activeMatch.activePerformerCorner || 'blue';
@@ -2234,6 +3328,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       };
     }
     gongFiredForRoundRef.current = null;
+    autoBreakMatchRef.current = null;
 
     const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
       ...prev,
@@ -2268,9 +3363,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         status: 'waiting',
         timerRemainingMs: activeMatch.roundDurationSec * 1000,
         timerStartedAtMs: 0,
+        juriLocked: false,
       };
       gongFiredForRoundRef.current = null;
       autoFinishedMatchRef.current = null;
+      autoBreakMatchRef.current = null;
 
       const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
         ...prev,
@@ -2332,6 +3429,112 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [activeMatch, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
+  useEffect(() => {
+    startBreakTimerRef.current = startBreakTimer;
+  }, [startBreakTimer]);
+
+  const resumeBreakTimer = useCallback(async () => {
+    if (activeMatch.status === 'finished') return;
+    const rem = getRemainingTimerMs(activeMatch, Date.now());
+    const nextRemaining = rem > 0 ? rem : 60000;
+    const patch: Partial<MatchData> = {
+      status: 'break',
+      timerRemainingMs: nextRemaining,
+      timerStartedAtMs: Date.now(),
+    };
+    if (rem <= 0) {
+      gongFiredForRoundRef.current = null;
+    }
+
+    const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+      ...prev,
+      matches: prev.matches.map((m) => (m.id === activeMatch.id ? { ...m, ...patch } : m)),
+    });
+
+    if (mode === 'firebase' && cloudArena) {
+      await executeFirestoreWithFallback(
+        cloudArena.id,
+        [
+          {
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
+            data: { ...patch },
+            timestampMode: 'update',
+          },
+        ],
+        localUpdater
+      );
+    } else {
+      commitLocalStore(localUpdater);
+    }
+  }, [activeMatch, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]);
+
+  const resetBreakTimer = useCallback(async () => {
+    if (activeMatch.status === 'finished') return;
+    const keepRunning = activeMatch.status === 'break' && activeMatch.timerStartedAtMs > 0;
+    const patch: Partial<MatchData> = {
+      status: 'break',
+      timerRemainingMs: 60000,
+      timerStartedAtMs: keepRunning ? Date.now() : 0,
+    };
+    gongFiredForRoundRef.current = null;
+
+    const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+      ...prev,
+      matches: prev.matches.map((m) => (m.id === activeMatch.id ? { ...m, ...patch } : m)),
+    });
+
+    if (mode === 'firebase' && cloudArena) {
+      await executeFirestoreWithFallback(
+        cloudArena.id,
+        [
+          {
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
+            data: { ...patch },
+            timestampMode: 'update',
+          },
+        ],
+        localUpdater
+      );
+    } else {
+      commitLocalStore(localUpdater);
+    }
+  }, [activeMatch, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]);
+
+  const toggleJuriLock = useCallback(
+    async (locked?: boolean) => {
+      if (activeMatch.status === 'finished') return;
+      const nextLocked = typeof locked === 'boolean' ? locked : !Boolean(activeMatch.juriLocked);
+      const patch: Partial<MatchData> = {
+        juriLocked: nextLocked,
+      };
+
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => (m.id === activeMatch.id ? { ...m, ...patch } : m)),
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        await executeFirestoreWithFallback(
+          cloudArena.id,
+          [
+            {
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', activeMatch.id],
+              data: { ...patch },
+              timestampMode: 'update',
+            },
+          ],
+          localUpdater
+        );
+      } else {
+        commitLocalStore(localUpdater);
+      }
+    },
+    [activeMatch.id, activeMatch.status, activeMatch.juriLocked, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+  );
+
   // --- Jurus TGRS Real-Time Scoring & Timer Actions ---
   const commitJurusPatch = useCallback(
     async (patch: Partial<MatchData>) => {
@@ -2365,7 +3568,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       if (activeMatch.status === 'finished') return;
       const jState = ensureJurusState(activeMatch);
       const jurusType = getJurusType(activeMatch);
-      const summary = computeCornerJurusSummary(jurusType, jState[corner]);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
+      const summary = computeCornerJurusSummary(jurusType, jState[corner], jurusJudgeCount);
       const patch: Partial<MatchData> = {
         activePerformerCorner: corner,
         jurusState: jState,
@@ -2380,18 +3584,19 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const updateJudgeCornerScore = useCallback(
     async (
-      judgeId: JudgeId,
+      judgeId: JurusJudgeId,
       corner: Corner,
       mutator: (prevScore: JurusJudgeCornerScore) => JurusJudgeCornerScore,
       eventMeta?: { type: string; pointsDelta: number; description: string }
     ) => {
       if (activeMatch.status === 'finished') return;
       const jurusType = getJurusType(activeMatch);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
       const jState = ensureJurusState(activeMatch);
-      const judgeKey: keyof Pick<JurusCornerData, 'judge1' | 'judge2' | 'judge3'> =
-        judgeId === 1 ? 'judge1' : judgeId === 2 ? 'judge2' : 'judge3';
+      const judgeKey = getJurusJudgeKey(judgeId);
+      const prevScore = getJurusJudgeScore(jState[corner], judgeId);
 
-      const nextJudgeScore = mutator(jState[corner][judgeKey]);
+      const nextJudgeScore = mutator(prevScore);
       const nextCornerData: JurusCornerData = {
         ...jState[corner],
         [judgeKey]: nextJudgeScore,
@@ -2400,7 +3605,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         ...jState,
         [corner]: nextCornerData,
       };
-      const summary = computeCornerJurusSummary(jurusType, nextCornerData);
+      const summary = computeCornerJurusSummary(jurusType, nextCornerData, jurusJudgeCount);
       const patch: Partial<MatchData> = {
         jurusState: nextState,
         ...(corner === 'blue' ? { blueScore: summary.finalScore } : { redScore: summary.finalScore }),
@@ -2424,7 +3629,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recordJurusWrongMove = useCallback(
-    async (judgeId: JudgeId, corner: Corner, delta: 1 | -1) => {
+    async (judgeId: JurusJudgeId, corner: Corner, delta: 1 | -1) => {
       const cornerLabel = corner === 'blue' ? 'Sudut Biru' : 'Sudut Merah';
       await updateJudgeCornerScore(
         judgeId,
@@ -2447,7 +3652,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setJurusStaminaScore = useCallback(
-    async (judgeId: JudgeId, corner: Corner, valueHundredths: number) => {
+    async (judgeId: JurusJudgeId, corner: Corner, valueHundredths: number) => {
       const clamped = Math.min(10, Math.max(0, Math.round(valueHundredths)));
       const cornerLabel = corner === 'blue' ? 'Sudut Biru' : 'Sudut Merah';
       await updateJudgeCornerScore(
@@ -2469,7 +3674,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const setJurusCreativeScore = useCallback(
     async (
-      judgeId: JudgeId,
+      judgeId: JurusJudgeId,
       corner: Corner,
       component: 'attackScore' | 'harmonyScore' | 'soulScore',
       valueHundredths: number
@@ -2484,15 +3689,21 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   );
 
   const toggleJurusJudgeSubmit = useCallback(
-    async (judgeId: JudgeId, corner: Corner) => {
+    async (judgeId: JurusJudgeId, corner: Corner) => {
       const jurusType = getJurusType(activeMatch);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
       const jState = ensureJurusState(activeMatch);
-      const judgeKey = judgeId === 1 ? 'judge1' : judgeId === 2 ? 'judge2' : 'judge3';
-      const willSubmit = !jState[corner][judgeKey].submitted;
-      const summaryAfter = computeCornerJurusSummary(jurusType, {
-        ...jState[corner],
-        [judgeKey]: { ...jState[corner][judgeKey], submitted: willSubmit },
-      });
+      const judgeKey = getJurusJudgeKey(judgeId);
+      const prevJudgeScore = getJurusJudgeScore(jState[corner], judgeId);
+      const willSubmit = !prevJudgeScore.submitted;
+      const summaryAfter = computeCornerJurusSummary(
+        jurusType,
+        {
+          ...jState[corner],
+          [judgeKey]: { ...prevJudgeScore, submitted: willSubmit },
+        },
+        jurusJudgeCount
+      );
       const cornerLabel = corner === 'blue' ? 'Sudut Biru' : 'Sudut Merah';
       const jIdx = judgeId - 1;
       await updateJudgeCornerScore(
@@ -2506,7 +3717,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           type: 'jurus_judge_submit',
           pointsDelta: 0,
           description: willSubmit
-            ? `Juri ${judgeId} Kunci Nilai ${cornerLabel}: ${formatJurusScore(summaryAfter.judgeTotals[jIdx])}`
+            ? `Juri ${judgeId} Kunci Nilai ${cornerLabel}: ${formatJurusScore(summaryAfter.judgeTotals[jIdx] ?? 0)}`
             : `Juri ${judgeId} Buka Kunci Nilai ${cornerLabel}`,
         }
       );
@@ -2518,6 +3729,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     async (corner: Corner, penaltyKey: JurusPenaltyType, delta: 1 | -1) => {
       if (activeMatch.status === 'finished') return;
       const jurusType = getJurusType(activeMatch);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
       const jState = ensureJurusState(activeMatch);
       const prevCount = jState[corner].penalties[penaltyKey] || 0;
       const nextCount = Math.min(20, Math.max(0, prevCount + delta));
@@ -2534,7 +3746,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         ...jState,
         [corner]: nextCornerData,
       };
-      const summary = computeCornerJurusSummary(jurusType, nextCornerData);
+      const summary = computeCornerJurusSummary(jurusType, nextCornerData, jurusJudgeCount);
       const patch: Partial<MatchData> = {
         jurusState: nextState,
         ...(corner === 'blue' ? { blueScore: summary.finalScore } : { redScore: summary.finalScore }),
@@ -2567,6 +3779,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       const performer: Corner = activeMatch.activePerformerCorner || 'blue';
       const targetNext: Corner = nextCorner || (performer === 'blue' ? 'red' : 'blue');
       const jurusType = getJurusType(activeMatch);
+      const jurusJudgeCount = getJurusJudgeCount(activeMatch);
       const jState = ensureJurusState(activeMatch);
 
       const runningSegMs =
@@ -2583,8 +3796,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           completed: true,
         },
       };
-      const currentSummary = computeCornerJurusSummary(jurusType, nextState[performer]);
-      const nextSummary = computeCornerJurusSummary(jurusType, nextState[targetNext]);
+      const currentSummary = computeCornerJurusSummary(jurusType, nextState[performer], jurusJudgeCount);
+      const nextSummary = computeCornerJurusSummary(jurusType, nextState[targetNext], jurusJudgeCount);
 
       const patch: Partial<MatchData> = {
         status: 'waiting',
@@ -2635,6 +3848,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         ownerId: user?.uid || arena.ownerId,
         name: clampStr(input.name, 80, 'Atlet Baru'),
         contingent: clampStr(input.contingent, 80, 'Kontingen'),
+        country: input.country?.trim() ? input.country.trim().slice(0, 64) : 'IDN',
+        ...(input.photo?.trim() ? { photo: input.photo.trim().slice(0, 250000) } : {}),
         weightClass: clampStr(input.weightClass, 80, 'Kelas Bebas'),
         gender: input.gender === 'Putri' ? 'Putri' : 'Putra',
         ageCategory: validAgeCategories.includes(input.ageCategory) ? input.ageCategory : 'Dewasa',
@@ -2648,43 +3863,196 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [arena.id, arena.ownerId, user]
   );
 
+  const buildMatchProfileSyncOps = useCallback(
+    (
+      athlete: AthleteData,
+      prevName?: string,
+      prevContingent?: string
+    ): {
+      matchPatches: Map<string, Partial<MatchData>>;
+    } => {
+      const matchPatches = new Map<string, Partial<MatchData>>();
+      const namesToMatch = new Set<string>(
+        [athlete.name, prevName || ''].map((n) => n.trim().toLowerCase()).filter(Boolean)
+      );
+      const contsToMatch = new Set<string>(
+        [athlete.contingent, prevContingent || '']
+          .map((c) => c.trim().toLowerCase())
+          .filter((c) => Boolean(c) && c !== '-')
+      );
+
+      const doesCornerMatch = (cornerName: string, cornerCont: string): boolean => {
+        const cn = cornerName.trim().toLowerCase();
+        if (!cn || !namesToMatch.has(cn)) return false;
+        const cc = cornerCont.trim().toLowerCase();
+        if (!cc || cc === '-' || contsToMatch.size === 0) return true;
+        return contsToMatch.has(cc);
+      };
+
+      const nextCountry = athlete.country?.trim().slice(0, 64) || 'IDN';
+      const nextPhoto = (athlete.photo || '').trim().slice(0, 250000);
+
+      for (const m of matches) {
+        if (m.status === 'finished') continue;
+        const patch: Partial<MatchData> = {};
+        if (doesCornerMatch(m.blueName, m.blueContingent)) {
+          patch.blueName = athlete.name;
+          patch.blueContingent = athlete.contingent;
+          patch.blueCountry = nextCountry;
+          patch.bluePhoto = nextPhoto;
+        }
+        if (doesCornerMatch(m.redName, m.redContingent)) {
+          patch.redName = athlete.name;
+          patch.redContingent = athlete.contingent;
+          patch.redCountry = nextCountry;
+          patch.redPhoto = nextPhoto;
+        }
+        if (Object.keys(patch).length > 0) {
+          matchPatches.set(m.id, patch);
+        }
+      }
+
+      return { matchPatches };
+    },
+    [matches]
+  );
+
   const addAthlete = useCallback(
     async (input: AddAthleteInput) => {
       const newAthlete = buildAthleteRecord(input);
+      const { matchPatches } = buildMatchProfileSyncOps(newAthlete);
+
       const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
         ...prev,
         athletes: [...(prev.athletes || []), newAthlete],
+        matches:
+          matchPatches.size > 0
+            ? prev.matches.map((m) => {
+                const p = matchPatches.get(m.id);
+                return p ? { ...m, ...p } : m;
+              })
+            : prev.matches,
       });
 
       if (mode === 'firebase' && cloudArena && user) {
-        await executeFirestoreWithFallback(
-          cloudArena.id,
-          [
-            {
-              opType: 'set',
-              pathSegments: ['arenas', cloudArena.id, 'athletes', newAthlete.id],
-              timestampMode: 'createdAtOnly',
-              data: {
-                id: newAthlete.id,
-                arenaId: cloudArena.id,
-                ownerId: user.uid,
-                name: newAthlete.name,
-                contingent: newAthlete.contingent,
-                weightClass: newAthlete.weightClass,
-                gender: newAthlete.gender,
-                ageCategory: newAthlete.ageCategory,
-                competitionCategory: newAthlete.competitionCategory,
-                gelanggang: newAthlete.gelanggang,
-              },
+        const ops: QueuedOpInput[] = [
+          {
+            opType: 'set',
+            pathSegments: ['arenas', cloudArena.id, 'athletes', newAthlete.id],
+            timestampMode: 'createdAtOnly',
+            data: {
+              id: newAthlete.id,
+              arenaId: cloudArena.id,
+              ownerId: user.uid,
+              name: newAthlete.name,
+              contingent: newAthlete.contingent,
+              country: newAthlete.country || 'IDN',
+              photo: newAthlete.photo || '',
+              weightClass: newAthlete.weightClass,
+              gender: newAthlete.gender,
+              ageCategory: newAthlete.ageCategory,
+              competitionCategory: newAthlete.competitionCategory,
+              gelanggang: newAthlete.gelanggang,
             },
-          ],
-          localUpdater
-        );
+          },
+        ];
+        for (const [mId, patch] of matchPatches.entries()) {
+          ops.push({
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'matches', mId],
+            timestampMode: 'update',
+            data: { ...patch },
+          });
+        }
+        await executeFirestoreWithFallback(cloudArena.id, ops, localUpdater);
       } else {
         commitLocalStore(localUpdater);
       }
     },
-    [buildAthleteRecord, mode, cloudArena, user, executeFirestoreWithFallback, commitLocalStore]
+    [buildAthleteRecord, buildMatchProfileSyncOps, mode, cloudArena, user, executeFirestoreWithFallback, commitLocalStore]
+  );
+
+  const updateAthlete = useCallback(
+    async (athleteId: string, input: Partial<AddAthleteInput>) => {
+      const existingAth = athletes.find((a) => a.id === athleteId);
+      if (!existingAth) return;
+
+      const updatedAth: AthleteData = {
+        ...existingAth,
+        name: input.name !== undefined ? clampStr(input.name, 80, existingAth.name) : existingAth.name,
+        contingent:
+          input.contingent !== undefined
+            ? clampStr(input.contingent, 80, existingAth.contingent)
+            : existingAth.contingent,
+        country:
+          input.country !== undefined
+            ? input.country.trim().slice(0, 64) || 'IDN'
+            : existingAth.country || 'IDN',
+        photo:
+          input.photo !== undefined
+            ? input.photo.trim().slice(0, 250000)
+            : existingAth.photo || '',
+        weightClass:
+          input.weightClass !== undefined
+            ? clampStr(input.weightClass, 80, existingAth.weightClass)
+            : existingAth.weightClass,
+        gender: input.gender ?? existingAth.gender,
+        ageCategory: input.ageCategory ?? existingAth.ageCategory ?? 'Dewasa',
+        competitionCategory: input.competitionCategory ?? existingAth.competitionCategory ?? 'Tanding',
+        gelanggang: input.gelanggang ?? existingAth.gelanggang ?? 'A',
+      };
+
+      const { matchPatches } = buildMatchProfileSyncOps(
+        updatedAth,
+        existingAth.name,
+        existingAth.contingent
+      );
+
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        athletes: (prev.athletes || []).map((a) => (a.id === athleteId ? updatedAth : a)),
+        matches:
+          matchPatches.size > 0
+            ? prev.matches.map((m) => {
+                const p = matchPatches.get(m.id);
+                return p ? { ...m, ...p } : m;
+              })
+            : prev.matches,
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        const ops: QueuedOpInput[] = [
+          {
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'athletes', athleteId],
+            timestampMode: 'none',
+            data: {
+              name: updatedAth.name,
+              contingent: updatedAth.contingent,
+              country: updatedAth.country || 'IDN',
+              photo: updatedAth.photo || '',
+              weightClass: updatedAth.weightClass,
+              gender: updatedAth.gender,
+              ageCategory: updatedAth.ageCategory || 'Dewasa',
+              competitionCategory: updatedAth.competitionCategory || 'Tanding',
+              gelanggang: updatedAth.gelanggang || 'A',
+            },
+          },
+        ];
+        for (const [mId, patch] of matchPatches.entries()) {
+          ops.push({
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'matches', mId],
+            timestampMode: 'update',
+            data: { ...patch },
+          });
+        }
+        await executeFirestoreWithFallback(cloudArena.id, ops, localUpdater);
+      } else {
+        commitLocalStore(localUpdater);
+      }
+    },
+    [athletes, buildMatchProfileSyncOps, mode, cloudArena, executeFirestoreWithFallback, commitLocalStore]
   );
 
   const importAthletes = useCallback(
@@ -2707,6 +4075,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             ownerId: user.uid,
             name: ath.name,
             contingent: ath.contingent,
+            country: ath.country || 'IDN',
+            photo: ath.photo || '',
             weightClass: ath.weightClass,
             gender: ath.gender,
             ageCategory: ath.ageCategory,
@@ -2883,7 +4253,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             arena.id,
             user?.uid || arena.ownerId,
             bracketTotalRounds,
-            String(createdMatches.length + 1)
+            String(createdMatches.length + 1),
+            athletes
           );
           createdMatches.push(m);
           return { ...slot, matchId: m.id };
@@ -3003,7 +4374,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         arena.id,
         user?.uid || arena.ownerId,
         rounds,
-        'act'
+        'act',
+        athletes
       );
 
       const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
@@ -3098,7 +4470,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             arena.id,
             user?.uid || arena.ownerId,
             rounds,
-            'br'
+            'br',
+            athletes
           );
           nextMatchId = createdNextMatch.id;
         }
@@ -3180,7 +4553,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const value: ArenaContextValue = {
     mode,
     isOnline,
-    pendingSyncCount: pendingOpsCount,
+    pendingSyncCount: effectivePendingSyncCount,
+    retrySyncNow,
     rtdbConnected,
     rtdbProjectId: userRtdbProjectId,
     user,
@@ -3203,10 +4577,16 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     updateMatchMeta,
     setActiveMatch,
     setMatchTotalRounds,
+    setMatchJurusJudgeCount,
+    setMatchRoundDuration,
     applyLotingMatchAssignments,
     deleteMatch,
     resetMatch,
+    resetSystem,
+    exportArenaBackup,
+    importArenaBackup,
     addAthlete,
+    updateAthlete,
     importAthletes,
     deleteAthlete,
     clearAthletes,
@@ -3216,6 +4596,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     clearBracket,
     sendJudgeVote,
     clearJudgeVote,
+    undoLastJudgeInput,
     triggerDewanAction,
     startVerification,
     castVerificationVote,
@@ -3230,6 +4611,9 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     resetTimer,
     setRound,
     startBreakTimer,
+    resumeBreakTimer,
+    resetBreakTimer,
+    toggleJuriLock,
     setActivePerformerCorner,
     recordJurusWrongMove,
     setJurusStaminaScore,

@@ -1,5 +1,13 @@
-import { Award, CheckCircle2, FileText, Lock, Minus, Plus, ShieldAlert, X } from 'lucide-react';
+import { Award, CheckCircle2, Delete, FileText, Lock, Minus, Plus, ShieldAlert, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import binaan1Icon from '@/binaan1.png';
+import binaan2Icon from '@/binaan2.png';
+import jatuhanBiruIcon from '@/Jatuhanbiru.png';
+import jatuhanMerahIcon from '@/jatuhanmerah.png';
+import peringatan1Icon from '@/peringatan1.png';
+import peringatan2Icon from '@/peringatan2.png';
+import teguran1Icon from '@/teguran1.png';
+import teguran2Icon from '@/teguran2.png';
 import { useArena } from '../context/ArenaContext';
 import type { AppView, Corner, JudgeId, JurusPenaltyType, WinMethod } from '../types/silat';
 import {
@@ -12,6 +20,9 @@ import {
   formatJurusElapsedMs,
   formatJurusScore,
   formatMatchTime,
+  getJurusJudgeCount,
+  getJurusJudgeIds,
+  getJurusJudgeScore,
   getJurusType,
   isJurusMatch,
   isTunggalOrRegu,
@@ -44,6 +55,7 @@ export function DewanView({ onNavigate }: DewanViewProps) {
     events,
     liveTimerMs,
     triggerDewanAction,
+    undoLastJudgeInput,
     startVerification,
     cancelVerification,
     resolveVerification,
@@ -62,6 +74,8 @@ export function DewanView({ onNavigate }: DewanViewProps) {
 
   const isJurus = isJurusMatch(activeMatch);
   const jurusType = getJurusType(activeMatch);
+  const jurusJudgeCount = getJurusJudgeCount(activeMatch);
+  const jurusJudgeIds = useMemo(() => getJurusJudgeIds(jurusJudgeCount), [jurusJudgeCount]);
   const jurusState = useMemo(() => ensureJurusState(activeMatch), [activeMatch]);
 
   useEffect(() => {
@@ -137,8 +151,7 @@ export function DewanView({ onNavigate }: DewanViewProps) {
       corners.red[r] = makeEmptyBucket();
     }
 
-    const chronological = [...events].reverse();
-    for (const ev of chronological) {
+    for (const ev of events) {
       if (ev.undone) continue;
       const r = Math.max(1, ev.round || 1);
 
@@ -274,8 +287,8 @@ export function DewanView({ onNavigate }: DewanViewProps) {
     jurusState.red.recordedElapsedMs + (activePerformer === 'red' ? runningSegMs : 0);
   const activeElapsedMs = activePerformer === 'blue' ? blueElapsedMs : redElapsedMs;
 
-  const blueJurusSummary = computeCornerJurusSummary(jurusType, jurusState.blue);
-  const redJurusSummary = computeCornerJurusSummary(jurusType, jurusState.red);
+  const blueJurusSummary = computeCornerJurusSummary(jurusType, jurusState.blue, jurusJudgeCount);
+  const redJurusSummary = computeCornerJurusSummary(jurusType, jurusState.red, jurusJudgeCount);
 
   const displayedBlueScore = isJurus ? blueJurusSummary.finalScore : activeMatch.blueScore;
   const displayedRedScore = isJurus ? redJurusSummary.finalScore : activeMatch.redScore;
@@ -294,10 +307,12 @@ export function DewanView({ onNavigate }: DewanViewProps) {
     const isTruthCat = isTunggalOrRegu(jurusType);
 
     const columnBg = isTrailing
-      ? 'bg-gradient-to-b from-slate-600 via-slate-700 to-slate-800 border-slate-400/75'
+      ? isBlue
+        ? 'bg-gradient-to-r from-slate-600 via-slate-800 to-black border-slate-400/75'
+        : 'bg-gradient-to-l from-slate-600 via-slate-800 to-black border-slate-400/75'
       : isBlue
-      ? 'bg-gradient-to-b from-blue-600 via-blue-700 to-blue-800 border-blue-300/80'
-      : 'bg-gradient-to-b from-red-600 via-red-700 to-red-800 border-red-300/80';
+      ? 'bg-gradient-to-r from-blue-600 via-blue-900 to-black border-blue-300/80'
+      : 'bg-gradient-to-l from-red-600 via-red-900 to-black border-red-300/80';
     const cornerLabelClass = isTrailing
       ? isBlue
         ? 'text-blue-300'
@@ -311,6 +326,7 @@ export function DewanView({ onNavigate }: DewanViewProps) {
 
     return (
       <section
+        data-testid={`dewan-jurus-corner-${corner}`}
         className={`rounded-2xl ${columnBg} border-2 shadow-2xl overflow-hidden flex flex-col transition-colors duration-300 ${
           isPerforming ? 'ring-2 ring-yellow-300/70' : ''
         }`}
@@ -367,36 +383,57 @@ export function DewanView({ onNavigate }: DewanViewProps) {
             </div>
           </div>
 
-          {/* Per-Judge Live Cards (J1, J2, J3) */}
-          <div className="grid grid-cols-3 gap-1.5">
-            {([1, 2, 3] as JudgeId[]).map((jid, idx) => {
-              const jKey = jid === 1 ? 'judge1' : jid === 2 ? 'judge2' : 'judge3';
-              const jScore = cornerData[jKey];
-              const jTotal = summary.judgeTotals[idx];
-              return (
-                <div
-                  key={jid}
-                  className={`rounded-xl border p-2 text-center ${
-                    jScore.submitted
-                      ? 'bg-emerald-950/75 border-emerald-400/70'
-                      : 'bg-black/55 border-white/20'
-                  }`}
-                >
-                  <div className="flex items-center justify-center gap-1 text-[10px] font-bold uppercase text-blue-200">
-                    <span>Juri {jid}</span>
-                    {jScore.submitted && <Lock className="w-2.5 h-2.5 text-emerald-300" />}
+          {/* Per-Judge Live Cards (J1..JN synced from Sekretaris) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-blue-200">
+              <span>Penilaian Juri Bertugas</span>
+              <span className="font-mono text-yellow-300" data-testid={`dewan-jurus-judge-count-${corner}`}>
+                {jurusJudgeCount} Juri
+              </span>
+            </div>
+            <div
+              data-testid={`dewan-jurus-judges-grid-${corner}`}
+              className={`grid gap-1.5 ${
+                jurusJudgeCount <= 3
+                  ? 'grid-cols-3'
+                  : jurusJudgeCount === 4
+                  ? 'grid-cols-2 sm:grid-cols-4'
+                  : jurusJudgeCount <= 6
+                  ? 'grid-cols-3'
+                  : jurusJudgeCount <= 8
+                  ? 'grid-cols-2 sm:grid-cols-4'
+                  : 'grid-cols-2 sm:grid-cols-5'
+              }`}
+            >
+              {jurusJudgeIds.map((jid, idx) => {
+                const jScore = getJurusJudgeScore(cornerData, jid);
+                const jTotal = summary.judgeTotals[idx] ?? 0;
+                return (
+                  <div
+                    key={jid}
+                    data-testid={`dewan-jurus-judge-card-${corner}-${jid}`}
+                    className={`rounded-xl border p-2 text-center ${
+                      jScore.submitted
+                        ? 'bg-emerald-950/75 border-emerald-400/70'
+                        : 'bg-black/55 border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-1 text-[10px] font-bold uppercase text-blue-200">
+                      <span>Juri {jid}</span>
+                      {jScore.submitted && <Lock className="w-2.5 h-2.5 text-emerald-300" />}
+                    </div>
+                    <div className="font-mono text-base sm:text-lg font-extrabold text-yellow-300 tabular-nums">
+                      {formatJurusScore(jTotal)}
+                    </div>
+                    <div className="text-[10px] font-mono text-white/80">
+                      {isTruthCat
+                        ? `S:${jScore.wrongMoves} K:+${formatJurusScore(jScore.staminaScore)}`
+                        : `${jScore.attackScore}/${jScore.harmonyScore}/${jScore.soulScore}`}
+                    </div>
                   </div>
-                  <div className="font-mono text-lg font-extrabold text-yellow-300 tabular-nums">
-                    {formatJurusScore(jTotal)}
-                  </div>
-                  <div className="text-[10px] font-mono text-white/80">
-                    {isTruthCat
-                      ? `S:${jScore.wrongMoves} K:+${formatJurusScore(jScore.staminaScore)}`
-                      : `${jScore.attackScore}/${jScore.harmonyScore}/${jScore.soulScore}`}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
 
           {/* 5 IPSI Dewan Penalty Controls (-0.50) */}
@@ -456,15 +493,40 @@ export function DewanView({ onNavigate }: DewanViewProps) {
     const name = isBlue ? activeMatch.blueName : activeMatch.redName;
     const contingent = isBlue ? activeMatch.blueContingent : activeMatch.redContingent;
     const score = isBlue ? activeMatch.blueScore : activeMatch.redScore;
-    const teguran1 = isBlue ? activeMatch.blueTeguran1 : activeMatch.redTeguran1;
-    const teguran2 = isBlue ? activeMatch.blueTeguran2 : activeMatch.redTeguran2;
+    const binaanCount = isBlue ? activeMatch.blueBinaan : activeMatch.redBinaan;
+    const teguran1Count = isBlue ? activeMatch.blueTeguran1 : activeMatch.redTeguran1;
+    const teguran2Count = isBlue ? activeMatch.blueTeguran2 : activeMatch.redTeguran2;
     const peringatan = isBlue ? activeMatch.bluePeringatan : activeMatch.redPeringatan;
 
+    const hasBinaanEvents = events.some(
+      (ev) => !ev.undone && ev.corner === corner && (ev.type === 'binaan1' || ev.type === 'binaan2' || ev.type === 'binaan')
+    );
+    const isBinaan1Active = hasBinaanEvents
+      ? events.some((ev) => !ev.undone && ev.corner === corner && (ev.type === 'binaan1' || ev.type === 'binaan'))
+      : binaanCount >= 1;
+    const isBinaan2Active = hasBinaanEvents
+      ? events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'binaan2')
+      : binaanCount >= 2;
+    const isTeguran1Active =
+      teguran1Count > 0 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'teguran1');
+    const isTeguran2Active =
+      teguran2Count > 0 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'teguran2');
+    const isPeringatan1Active =
+      peringatan >= 1 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'peringatan1');
+    const isPeringatan2Active =
+      peringatan >= 2 || events.some((ev) => !ev.undone && ev.corner === corner && ev.type === 'peringatan2');
+
+    const inactiveBtnClass =
+      'bg-slate-700/95 hover:bg-slate-600/95 border border-slate-300/70 text-slate-200 font-bold';
+    const inactiveIconClass = 'brightness-[1.7] grayscale opacity-90';
+
     const columnBg = isTrailing
-      ? 'bg-gradient-to-b from-slate-600 via-slate-700 to-slate-800 border-slate-400/75'
+      ? isBlue
+        ? 'bg-gradient-to-r from-slate-600 via-slate-800 to-black border-slate-400/75'
+        : 'bg-gradient-to-l from-slate-600 via-slate-800 to-black border-slate-400/75'
       : isBlue
-      ? 'bg-gradient-to-b from-blue-600 via-blue-700 to-blue-800 border-blue-300/80'
-      : 'bg-gradient-to-b from-red-600 via-red-700 to-red-800 border-red-300/80';
+      ? 'bg-gradient-to-r from-blue-600 via-blue-900 to-black border-blue-300/80'
+      : 'bg-gradient-to-l from-red-600 via-red-900 to-black border-red-300/80';
     const cornerLabelClass = isTrailing
       ? isBlue
         ? 'text-blue-300'
@@ -477,7 +539,10 @@ export function DewanView({ onNavigate }: DewanViewProps) {
       : 'text-red-100';
 
     return (
-      <section className={`rounded-2xl ${columnBg} border-2 shadow-2xl overflow-hidden flex flex-col transition-colors duration-300`}>
+      <section
+        data-testid={`dewan-corner-${corner}`}
+        className={`rounded-2xl ${columnBg} border-2 shadow-2xl overflow-hidden flex flex-col transition-colors duration-300`}
+      >
         {/* Bagian Atas: Identitas Sudut & Atlet */}
         <div className="border-b border-white/15 px-4 py-2 text-center shrink-0">
           <div className={`text-[11px] font-bold uppercase tracking-wider ${cornerLabelClass}`}>
@@ -493,43 +558,74 @@ export function DewanView({ onNavigate }: DewanViewProps) {
             data-testid={`corner-main-score-${corner}`}
             className="flex-1 min-h-0 flex items-center justify-center py-1 text-center"
           >
-            <span className="font-mono text-6xl sm:text-7xl xl:text-8xl font-black tabular-nums leading-none text-white drop-shadow-[0_2px_10px_rgba(15,23,42,0.4)]">
+            <span className="font-mono text-6xl sm:text-7xl xl:text-8xl font-black tabular-nums leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.65)]">
               {score}
             </span>
           </div>
 
-          {/* Bagian Bawah: Menu Pelanggaran & Aksi Wasit (3 baris vertikal x 3 kolom horizontal, jarak rapat) */}
+          {/* Bagian Bawah: Menu Pelanggaran & Aksi Wasit (3 baris vertikal x 3 kolom horizontal, ikon jelas & tanpa angka minus/total) */}
           <div data-testid={`corner-actions-grid-${corner}`} className="space-y-1.5 shrink-0">
             {/* Baris 1 (Atas): Binaan 1, Binaan 2, Jatuhan Sah */}
             <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
-                disabled={isFinished}
+                disabled={isFinished || isBinaan1Active}
                 onClick={() => void triggerDewanAction('binaan1', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-orange-500 hover:bg-orange-400 border border-orange-200/85 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 transition-colors ${
+                  isBinaan1Active
+                    ? 'bg-orange-500 border border-orange-200/90 text-white font-bold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isBinaan1Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Binaan 1</span>
-                <span className="font-mono text-[10px] font-bold text-orange-50">(0)</span>
+                <img
+                  src={binaan1Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isBinaan1Active
+                      ? 'brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]'
+                      : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Binaan 1</span>
               </button>
 
               <button
                 type="button"
-                disabled={isFinished}
+                disabled={isFinished || isBinaan2Active}
                 onClick={() => void triggerDewanAction('binaan2', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-orange-500 hover:bg-orange-400 border border-orange-200/85 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 transition-colors ${
+                  isBinaan2Active
+                    ? 'bg-orange-500 border border-orange-200/90 text-white font-bold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isBinaan2Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Binaan 2</span>
-                <span className="font-mono text-[10px] font-bold text-orange-50">(0)</span>
+                <img
+                  src={binaan2Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isBinaan2Active
+                      ? 'brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]'
+                      : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Binaan 2</span>
               </button>
 
               <button
                 type="button"
                 disabled={isFinished}
                 onClick={() => void triggerDewanAction('fall', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-green-500 hover:bg-green-400 border border-green-200 shadow-sm disabled:opacity-40 text-xs font-extrabold text-slate-950 flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className="min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl bg-green-500 hover:bg-green-400 border border-green-200 shadow-sm disabled:opacity-40 text-xs sm:text-[13px] font-extrabold text-slate-950 flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
               >
-                <span>Jatuhan Sah</span>
-                <span className="font-mono text-[10px] font-extrabold text-slate-950">(+3)</span>
+                <img
+                  src={isBlue ? jatuhanBiruIcon : jatuhanMerahIcon}
+                  alt=""
+                  aria-hidden="true"
+                  className="w-9 h-9 sm:w-10 sm:h-10 xl:w-11 xl:h-11 object-contain select-none pointer-events-none"
+                />
+                <span className="leading-none">Jatuhan Sah</span>
               </button>
             </div>
 
@@ -537,36 +633,53 @@ export function DewanView({ onNavigate }: DewanViewProps) {
             <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
-                disabled={isFinished}
+                disabled={isFinished || isTeguran1Active}
                 onClick={() => void triggerDewanAction('teguran1', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-yellow-400 hover:bg-yellow-300 border border-yellow-100 shadow-sm disabled:opacity-40 text-xs font-extrabold text-slate-950 flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 transition-colors ${
+                  isTeguran1Active
+                    ? 'bg-yellow-400 border border-yellow-100 text-slate-950 font-extrabold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isTeguran1Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Teguran 1</span>
-                <span className="font-mono text-[10px] font-bold text-slate-900">
-                  (-1) &middot; Total: {teguran1}
-                </span>
+                <img
+                  src={teguran1Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isTeguran1Active ? 'brightness-0' : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Teguran 1</span>
               </button>
 
               <button
                 type="button"
-                disabled={isFinished}
+                disabled={isFinished || isTeguran2Active}
                 onClick={() => void triggerDewanAction('teguran2', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-yellow-400 hover:bg-yellow-300 border border-yellow-100 shadow-sm disabled:opacity-40 text-xs font-extrabold text-slate-950 flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 transition-colors ${
+                  isTeguran2Active
+                    ? 'bg-yellow-400 border border-yellow-100 text-slate-950 font-extrabold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isTeguran2Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Teguran 2</span>
-                <span className="font-mono text-[10px] font-bold text-slate-900">
-                  (-2) &middot; Total: {teguran2}
-                </span>
+                <img
+                  src={teguran2Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isTeguran2Active ? 'brightness-0' : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Teguran 2</span>
               </button>
 
               <button
                 type="button"
                 disabled={isFinished}
                 onClick={() => void triggerDewanAction('cancel_fall', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-2 py-1 rounded-xl bg-[#7B1E1E] hover:bg-[#932626] border border-red-300/70 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex flex-col items-center justify-center cursor-pointer transition-colors"
+                className="min-h-[60px] xl:min-h-[68px] px-2 py-1.5 rounded-xl bg-[#7B1E1E] hover:bg-[#932626] border border-red-300/70 shadow-sm disabled:opacity-40 text-xs sm:text-[13px] font-bold text-white flex flex-col items-center justify-center cursor-pointer transition-colors"
               >
-                <span>Jatuhan Batal</span>
-                <span className="font-mono text-[10px] font-bold text-yellow-200">(-3)</span>
+                <span className="leading-tight">Jatuhan Batal</span>
               </button>
             </div>
 
@@ -574,32 +687,58 @@ export function DewanView({ onNavigate }: DewanViewProps) {
             <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
-                disabled={isFinished || peringatan >= 1}
+                disabled={isFinished || isPeringatan1Active}
                 onClick={() => void triggerDewanAction('peringatan1', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-1.5 py-1 rounded-xl bg-red-600 hover:bg-red-500 border border-red-200/85 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex flex-col items-center justify-center whitespace-nowrap cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-1.5 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 whitespace-nowrap transition-colors ${
+                  isPeringatan1Active
+                    ? 'bg-red-600 border border-red-200/90 text-white font-bold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isPeringatan1Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Peringatan 1</span>
-                <span className="font-mono text-[10px] font-bold text-yellow-200">(-5)</span>
+                <img
+                  src={peringatan1Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isPeringatan1Active
+                      ? 'brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]'
+                      : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Peringatan 1</span>
               </button>
 
               <button
                 type="button"
-                disabled={isFinished || peringatan >= 2}
+                disabled={isFinished || isPeringatan2Active}
                 onClick={() => void triggerDewanAction('peringatan2', corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-1.5 py-1 rounded-xl bg-red-600 hover:bg-red-500 border border-red-200/85 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex flex-col items-center justify-center whitespace-nowrap cursor-pointer transition-colors"
+                className={`min-h-[60px] xl:min-h-[68px] px-1.5 py-1.5 rounded-xl shadow-sm text-xs sm:text-[13px] flex flex-col items-center justify-center gap-1 whitespace-nowrap transition-colors ${
+                  isPeringatan2Active
+                    ? 'bg-red-600 border border-red-200/90 text-white font-bold cursor-default'
+                    : `${inactiveBtnClass} cursor-pointer`
+                } ${isFinished && !isPeringatan2Active ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                <span>Peringatan 2</span>
-                <span className="font-mono text-[10px] font-bold text-yellow-200">(-10)</span>
+                <img
+                  src={peringatan2Icon}
+                  alt=""
+                  aria-hidden="true"
+                  className={`w-8 h-8 sm:w-9 sm:h-9 xl:w-10 xl:h-10 object-contain select-none pointer-events-none transition-all ${
+                    isPeringatan2Active
+                      ? 'brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]'
+                      : inactiveIconClass
+                  }`}
+                />
+                <span className="leading-none">Peringatan 2</span>
               </button>
 
               <button
                 type="button"
                 disabled={isFinished || peringatan >= 3}
                 onClick={() => setConfirmDisqCorner(corner)}
-                className="min-h-[42px] xl:min-h-[48px] px-1.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 border border-yellow-300/80 shadow-sm disabled:opacity-40 text-xs font-bold text-white flex items-center justify-center gap-1 whitespace-nowrap cursor-pointer transition-colors"
+                className="min-h-[60px] xl:min-h-[68px] px-1.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 border border-yellow-300/80 shadow-sm disabled:opacity-40 text-xs sm:text-[13px] font-bold text-white flex flex-col items-center justify-center gap-1 whitespace-nowrap cursor-pointer transition-colors"
               >
-                <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-yellow-300" />
-                <span>Disq</span>
+                <ShieldAlert className="w-7 h-7 sm:w-8 sm:h-8 xl:w-9 xl:h-9 shrink-0 text-yellow-300" />
+                <span className="leading-none">Disq</span>
               </button>
             </div>
           </div>
@@ -650,6 +789,9 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                 </div>
                 <div className="text-[11px] font-semibold text-white">
                   Tampil: {activePerformer === 'blue' ? 'Sudut Biru' : 'Sudut Merah'}
+                </div>
+                <div className="text-[10px] font-mono font-bold text-yellow-200" data-testid="dewan-jurus-center-judge-count">
+                  {jurusJudgeCount} Juri Bertugas
                 </div>
               </div>
 
@@ -745,6 +887,8 @@ export function DewanView({ onNavigate }: DewanViewProps) {
               <div data-testid="dewan-judge-log" className="space-y-1.5">
                 {([1, 2, 3] as JudgeId[]).map((jid) => {
                   const counts = judgePressSummary[jid];
+                  const hasInput =
+                    counts.blueP + counts.blueT + counts.redP + counts.redT > 0;
                   const vote =
                     jid === 1
                       ? activeMatch.judge1Vote
@@ -760,16 +904,30 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                       data-testid={`judge-log-j${jid}`}
                       className="rounded-lg bg-purple-950/60 border border-purple-400/35 p-1.5 space-y-1"
                     >
-                      <div className="flex items-center justify-between text-[10px] font-bold leading-none">
-                        <span className="text-white">Juri {jid}</span>
-                        {isFresh && vote && (
-                          <span
-                            aria-label={`Juri ${jid} aktif sudut ${vote.corner === 'blue' ? 'Biru' : 'Merah'}`}
-                            className={`w-2 h-2 rounded-full ${
-                              vote.corner === 'blue' ? 'bg-blue-300' : 'bg-red-300'
-                            }`}
-                          />
-                        )}
+                      <div className="flex items-center justify-between gap-1 text-[10px] font-bold leading-none">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-white">Juri {jid}</span>
+                          {isFresh && vote && (
+                            <span
+                              aria-label={`Juri ${jid} aktif sudut ${vote.corner === 'blue' ? 'Biru' : 'Merah'}`}
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                vote.corner === 'blue' ? 'bg-blue-300' : 'bg-red-300'
+                              }`}
+                            />
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          data-testid={`judge-backspace-j${jid}`}
+                          disabled={isFinished || !hasInput}
+                          onClick={() => void undoLastJudgeInput(jid)}
+                          title={`Hapus input nilai terakhir Juri ${jid}`}
+                          aria-label={`Backspace Juri ${jid}`}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-900/90 hover:bg-rose-600 border border-purple-300/45 hover:border-rose-300 text-[9px] font-bold text-purple-100 hover:text-white disabled:opacity-35 disabled:hover:bg-purple-900/90 disabled:hover:border-purple-300/45 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
+                        >
+                          <Delete className="w-3 h-3 shrink-0" />
+                          <span>Backspace</span>
+                        </button>
                       </div>
                       <div className="grid grid-cols-2 gap-1 font-mono text-[10px] font-bold tabular-nums">
                         <div className="rounded bg-blue-700/90 border border-blue-300/60 px-1 py-0.5 text-center text-white leading-tight">
@@ -832,7 +990,8 @@ export function DewanView({ onNavigate }: DewanViewProps) {
           </div>
         )}
 
-        {/* Bottom Log Penilaian & Pelanggaran Real-Time sejajar di bawah Sudut Biru & Sudut Merah */}
+        {/* Bottom Log Penilaian & Pelanggaran Real-Time sejajar di bawah Sudut Biru & Sudut Merah (dihilangkan pada Jurus Tunggal Baku) */}
+        {!(isJurus && jurusType === 'Tunggal Baku') && (
         <section
           aria-label="Log Penilaian dan Pelanggaran Real-Time"
           className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 sm:gap-3 items-stretch shrink-0"
@@ -884,12 +1043,12 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                   </span>
                 </div>
 
-                <div className="flex-1 overflow-y-auto max-h-[126px]">
+                <div className="flex-1 overflow-y-auto max-h-[144px]">
                   <table className="w-full table-fixed border-collapse text-xs">
                     <thead>
                       <tr className="bg-black/35 border-b border-purple-700/50 text-[10px] font-extrabold uppercase tracking-wider">
                         <th
-                          className={`w-12 py-1 px-1 text-center border-r border-purple-800/45 ${
+                          className={`w-9 py-1 px-0.5 text-center border-r border-purple-800/45 ${
                             isBlue ? 'text-blue-200' : 'text-red-200'
                           }`}
                         >
@@ -898,25 +1057,26 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                         {([1, 2, 3] as JudgeId[]).map((jid) => (
                           <th
                             key={jid}
-                            className={`w-[58px] sm:w-[68px] py-1 px-1 text-center border-r border-purple-800/45 ${
+                            className={`w-[22%] py-1 px-1 text-center border-r border-purple-800/45 ${
                               isBlue ? 'text-blue-200' : 'text-red-200'
                             }`}
                           >
                             J{jid}
                           </th>
                         ))}
-                        <th className="py-1 px-2 text-center text-emerald-300">DWN</th>
+                        <th className="py-1 px-1 text-center text-emerald-300">DWN</th>
                       </tr>
                     </thead>
                     <tbody>
                       {roundLogData.rounds.map((r) => {
                         const bucket = roundLogData.corners[corner][r];
+                        const dewanItems = bucket?.dewan || [];
                         return (
                           <tr
                             key={r}
                             className="border-b last:border-b-0 border-purple-800/45 hover:bg-white/[0.02]"
                           >
-                            <td className="py-1.5 px-1 text-center font-mono text-[11px] font-bold text-white/95 border-r border-purple-800/45 whitespace-nowrap">
+                            <td className="py-1 px-0.5 text-center font-mono text-[11px] font-bold text-white/95 border-r border-purple-800/45 whitespace-nowrap">
                               {isJurus ? jurusType.slice(0, 4) : `Rd ${r}`}
                             </td>
                             {([1, 2, 3] as JudgeId[]).map((jid) => {
@@ -927,14 +1087,37 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                                   className="py-1 px-1 text-center align-middle border-r border-purple-800/45"
                                 >
                                   {items.length === 0 ? (
-                                    <span className="text-slate-400 font-mono text-[11px]">-</span>
-                                  ) : (
-                                    <div className="flex flex-wrap items-center justify-center gap-0.5">
+                                    <span className="inline-flex h-[24px] items-center justify-center text-slate-400 font-mono text-[11px]">
+                                      -
+                                    </span>
+                                  ) : items.length > 5 ? (
+                                    <div
+                                      data-testid={`corner-log-${corner}-r${r}-j${jid}-scroll`}
+                                      className="grid grid-cols-5 gap-x-1 gap-y-1.5 h-[25px] overflow-y-auto pr-0.5 [scrollbar-width:thin] [scrollbar-color:rgba(192,132,252,0.8)_transparent] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-purple-400/80 [&::-webkit-scrollbar-track]:bg-black/25"
+                                    >
                                       {items.map((item) => (
                                         <span
                                           key={item.id}
                                           title={item.title}
-                                          className={`px-1 py-0.5 rounded border font-mono text-[10px] font-bold leading-none tabular-nums ${chipClassForTone(
+                                          className={`h-[24px] px-0.5 rounded border font-mono ${
+                                            item.label.length > 3 ? 'text-[9px]' : 'text-[11px]'
+                                          } font-extrabold leading-none tabular-nums flex items-center justify-center whitespace-nowrap ${chipClassForTone(
+                                            item.tone
+                                          )}`}
+                                        >
+                                          {item.label}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center justify-center gap-1 min-h-[25px]">
+                                      {items.map((item) => (
+                                        <span
+                                          key={item.id}
+                                          title={item.title}
+                                          className={`h-[24px] min-w-[24px] px-1 rounded border font-mono ${
+                                            item.label.length > 3 ? 'text-[9px]' : 'text-[11px]'
+                                          } font-extrabold leading-none tabular-nums flex items-center justify-center whitespace-nowrap ${chipClassForTone(
                                             item.tone
                                           )}`}
                                         >
@@ -946,16 +1129,39 @@ export function DewanView({ onNavigate }: DewanViewProps) {
                                 </td>
                               );
                             })}
-                            <td className="py-1 px-2 text-center align-middle">
-                              {!bucket || bucket.dewan.length === 0 ? (
-                                <span className="text-slate-400 font-mono text-[11px]">-</span>
-                              ) : (
-                                <div className="flex flex-wrap items-center justify-center gap-1">
-                                  {bucket.dewan.map((item) => (
+                            <td className="py-1 px-1 text-center align-middle">
+                              {dewanItems.length === 0 ? (
+                                <span className="inline-flex h-[24px] items-center justify-center text-slate-400 font-mono text-[11px]">
+                                  -
+                                </span>
+                              ) : dewanItems.length > 5 ? (
+                                <div
+                                  data-testid={`corner-log-${corner}-r${r}-dwn-scroll`}
+                                  className="grid grid-cols-5 gap-x-1 gap-y-1.5 h-[25px] overflow-y-auto pr-0.5 [scrollbar-width:thin] [scrollbar-color:rgba(192,132,252,0.8)_transparent] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-purple-400/80 [&::-webkit-scrollbar-track]:bg-black/25"
+                                >
+                                  {dewanItems.map((item) => (
                                     <span
                                       key={item.id}
                                       title={item.title}
-                                      className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-extrabold leading-none tabular-nums ${chipClassForTone(
+                                      className={`h-[24px] px-0.5 rounded border font-mono ${
+                                        item.label.length > 3 ? 'text-[9px]' : 'text-[11px]'
+                                      } font-extrabold leading-none tabular-nums flex items-center justify-center whitespace-nowrap ${chipClassForTone(
+                                        item.tone
+                                      )}`}
+                                    >
+                                      {item.label}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center gap-1 min-h-[25px]">
+                                  {dewanItems.map((item) => (
+                                    <span
+                                      key={item.id}
+                                      title={item.title}
+                                      className={`h-[24px] min-w-[24px] px-1 rounded border font-mono ${
+                                        item.label.length > 3 ? 'text-[9px]' : 'text-[11px]'
+                                      } font-extrabold leading-none tabular-nums flex items-center justify-center whitespace-nowrap ${chipClassForTone(
                                         item.tone
                                       )}`}
                                     >
@@ -975,6 +1181,7 @@ export function DewanView({ onNavigate }: DewanViewProps) {
             );
           })}
         </section>
+        )}
       </main>
 
       {/* Pop-up Keputusan Pemenang (TKO / Mutlak / Undur Diri / WMP) */}

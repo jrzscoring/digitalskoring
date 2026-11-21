@@ -1,4 +1,5 @@
-import {createRoot} from 'react-dom/client';
+import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
@@ -38,28 +39,19 @@ function purgeLegacyBrowserData(): void {
   } catch {
     // Ignore storage access errors in restricted iframes
   }
-
-  try {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then((registrations) => {
-        for (const registration of registrations) {
-          void registration.unregister();
-        }
-      }).catch(() => {});
-    }
-    if ('caches' in window) {
-      window.caches.keys().then((cacheNames) => {
-        for (const name of cacheNames) {
-          void window.caches.delete(name);
-        }
-      }).catch(() => {});
-    }
-  } catch {
-    // Ignore service worker/cache cleanup errors
-  }
 }
 
 purgeLegacyBrowserData();
 
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  registerSW({
+    immediate: true,
+    onRegisterError() {
+      // Tetap beroperasi normal menggunakan localStorage backup jika SW diblokir di lingkungan tertentu
+    },
+  });
+}
+
 createRoot(document.getElementById('root')!).render(<App />);
+
 

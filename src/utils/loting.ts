@@ -10,8 +10,12 @@ export interface LotingMatchDraft {
   status: MatchStatus;
   blueName: string;
   blueContingent: string;
+  blueCountry?: string;
+  bluePhoto?: string;
   redName: string;
   redContingent: string;
+  redCountry?: string;
+  redPhoto?: string;
 }
 
 export interface CornerRef {
@@ -22,6 +26,8 @@ export interface CornerRef {
 interface AthleteSlot {
   name: string;
   contingent: string;
+  country?: string;
+  photo?: string;
 }
 
 function fisherYatesShuffle<T>(items: T[], rng: () => number): T[] {
@@ -81,8 +87,12 @@ export function shuffleClassMatchups(
       ...target,
       blueName: target.redName,
       blueContingent: target.redContingent,
+      blueCountry: target.redCountry,
+      bluePhoto: target.redPhoto,
       redName: target.blueName,
       redContingent: target.blueContingent,
+      redCountry: target.blueCountry,
+      redPhoto: target.bluePhoto,
     };
     return next;
   }
@@ -90,8 +100,18 @@ export function shuffleClassMatchups(
   const originalPairs: Array<[AthleteSlot, AthleteSlot]> = editableIndices.map((idx) => {
     const m = classMatches[idx];
     return [
-      { name: m.blueName, contingent: m.blueContingent },
-      { name: m.redName, contingent: m.redContingent },
+      {
+        name: m.blueName,
+        contingent: m.blueContingent,
+        country: m.blueCountry,
+        photo: m.bluePhoto,
+      },
+      {
+        name: m.redName,
+        contingent: m.redContingent,
+        country: m.redCountry,
+        photo: m.redPhoto,
+      },
     ];
   });
   const originalSig = pairSignature(originalPairs);
@@ -126,8 +146,12 @@ export function shuffleClassMatchups(
       ...result[matchIdx],
       blueName: blue.name,
       blueContingent: blue.contingent,
+      blueCountry: blue.country,
+      bluePhoto: blue.photo,
       redName: red.name,
       redContingent: red.contingent,
+      redCountry: red.country,
+      redPhoto: red.photo,
     };
   });
 
@@ -199,8 +223,13 @@ export function swapMatchCorners(
 
   const fromName = from.corner === 'blue' ? fromMatch.blueName : fromMatch.redName;
   const fromCont = from.corner === 'blue' ? fromMatch.blueContingent : fromMatch.redContingent;
+  const fromCountry = from.corner === 'blue' ? fromMatch.blueCountry : fromMatch.redCountry;
+  const fromPhoto = from.corner === 'blue' ? fromMatch.bluePhoto : fromMatch.redPhoto;
+
   const toName = to.corner === 'blue' ? toMatch.blueName : toMatch.redName;
   const toCont = to.corner === 'blue' ? toMatch.blueContingent : toMatch.redContingent;
+  const toCountry = to.corner === 'blue' ? toMatch.blueCountry : toMatch.redCountry;
+  const toPhoto = to.corner === 'blue' ? toMatch.bluePhoto : toMatch.redPhoto;
 
   const updated = [...drafts];
 
@@ -209,18 +238,22 @@ export function swapMatchCorners(
       ...fromMatch,
       blueName: from.corner === 'blue' ? toName : fromName,
       blueContingent: from.corner === 'blue' ? toCont : fromCont,
+      blueCountry: from.corner === 'blue' ? toCountry : fromCountry,
+      bluePhoto: from.corner === 'blue' ? toPhoto : fromPhoto,
       redName: from.corner === 'red' ? toName : fromName,
       redContingent: from.corner === 'red' ? toCont : fromCont,
+      redCountry: from.corner === 'red' ? toCountry : fromCountry,
+      redPhoto: from.corner === 'red' ? toPhoto : fromPhoto,
     };
   } else {
     updated[fromIdx] =
       from.corner === 'blue'
-        ? { ...fromMatch, blueName: toName, blueContingent: toCont }
-        : { ...fromMatch, redName: toName, redContingent: toCont };
+        ? { ...fromMatch, blueName: toName, blueContingent: toCont, blueCountry: toCountry, bluePhoto: toPhoto }
+        : { ...fromMatch, redName: toName, redContingent: toCont, redCountry: toCountry, redPhoto: toPhoto };
     updated[toIdx] =
       to.corner === 'blue'
-        ? { ...toMatch, blueName: fromName, blueContingent: fromCont }
-        : { ...toMatch, redName: fromName, redContingent: fromCont };
+        ? { ...toMatch, blueName: fromName, blueContingent: fromCont, blueCountry: fromCountry, bluePhoto: fromPhoto }
+        : { ...toMatch, redName: fromName, redContingent: fromCont, redCountry: fromCountry, redPhoto: fromPhoto };
   }
 
   return { updated, swapped: true };

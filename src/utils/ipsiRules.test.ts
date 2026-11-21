@@ -11,6 +11,8 @@ import {
   evaluateVerificationConsensus,
   formatJurusScore,
   formatMatchTime,
+  getJurusJudgeCount,
+  getJurusJudgeIds,
   getRemainingTimerMs,
   isJurusMatch,
 } from './ipsiRules';
@@ -275,5 +277,59 @@ test('evaluateVerificationConsensus resolves waiting, 2-of-3 agreement, and 3-wa
   assert.equal(splitSummary.canProcess, true);
   assert.equal(splitSummary.consensus, 'split');
 });
+
+test('Jurus TGRS dynamic judge count supports 4..10 judges with default 3 fallback', () => {
+  assert.equal(getJurusJudgeCount(createBaseMatch()), 3);
+  assert.equal(getJurusJudgeCount(createBaseMatch({ jurusJudgeCount: 6 })), 6);
+  assert.deepEqual(getJurusJudgeIds(4), [1, 2, 3, 4]);
+  assert.deepEqual(getJurusJudgeIds(10), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // 4 judges (even): sorted [988, 991, 995, 998] -> median (991 + 995) / 2 = 993
+  const state4 = createInitialJurusState();
+  state4.blue.judge1.wrongMoves = 2; // 988
+  state4.blue.judge2.wrongMoves = 0;
+  state4.blue.judge2.staminaScore = 1; // 991
+  state4.blue.judge3.staminaScore = 5; // 995
+  state4.blue.judge4 = {
+    wrongMoves: 0,
+    staminaScore: 8,
+    attackScore: 0,
+    harmonyScore: 0,
+    soulScore: 0,
+    submitted: true,
+  }; // 998
+
+  const summary4 = computeCornerJurusSummary('Tunggal Baku', state4.blue, 4);
+  assert.deepEqual(summary4.judgeTotals, [988, 991, 995, 998]);
+  assert.equal(summary4.median, 993);
+  assert.equal(summary4.finalScore, 993);
+
+  // 7 judges (odd): sorted [987, 989, 990, 992, 994, 995, 997] -> median 992
+  const state7 = createInitialJurusState();
+  state7.red.judge1.wrongMoves = 3; // 987
+  state7.red.judge2.wrongMoves = 1; // 989
+  state7.red.judge3.wrongMoves = 0; // 990
+  state7.red.judge4 = { wrongMoves: 0, staminaScore: 2, attackScore: 0, harmonyScore: 0, soulScore: 0, submitted: true }; // 992
+  state7.red.judge5 = { wrongMoves: 0, staminaScore: 4, attackScore: 0, harmonyScore: 0, soulScore: 0, submitted: true }; // 994
+  state7.red.judge6 = { wrongMoves: 0, staminaScore: 5, attackScore: 0, harmonyScore: 0, soulScore: 0, submitted: true }; // 995
+  state7.red.judge7 = { wrongMoves: 0, staminaScore: 7, attackScore: 0, harmonyScore: 0, soulScore: 0, submitted: true }; // 997
+
+  const summary7 = computeCornerJurusSummary('Tunggal Baku', state7.red, 7);
+  assert.equal(summary7.judgeTotals.length, 7);
+  assert.equal(summary7.median, 992);
+  assert.equal(summary7.finalScore, 992);
+
+  const match7 = createBaseMatch({
+    competitionCategory: 'Jurus',
+    jurusType: 'Tunggal Baku',
+    jurusJudgeCount: 7,
+    blueScore: summary4.finalScore,
+    redScore: summary7.finalScore,
+    jurusState: { blue: state4.blue, red: state7.red },
+  });
+  const decision = determineOfficialWinner(match7);
+  assert.equal(decision.winner, 'blue');
+});
+
 
 

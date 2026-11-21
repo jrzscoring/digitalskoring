@@ -6,6 +6,7 @@ interface TournamentIdentityBannerProps {
   arena: ArenaData;
   match?: MatchData;
   compact?: boolean;
+  hideEventDetails?: boolean;
   onBack?: () => void;
   showFullscreen?: boolean;
 }
@@ -14,6 +15,7 @@ export function TournamentIdentityBanner({
   arena,
   match,
   compact = false,
+  hideEventDetails = false,
   onBack,
   showFullscreen = false,
 }: TournamentIdentityBannerProps) {
@@ -41,8 +43,10 @@ export function TournamentIdentityBanner({
   };
 
   const details: string[] = [];
-  if (arena.venue?.trim()) details.push(arena.venue.trim());
-  if (arena.eventDate?.trim()) details.push(arena.eventDate.trim());
+  if (!hideEventDetails) {
+    if (arena.venue?.trim()) details.push(arena.venue.trim());
+    if (arena.eventDate?.trim()) details.push(arena.eventDate.trim());
+  }
   if (match) {
     details.push(match.matchNumber, match.stage, match.weightClass);
   }
@@ -75,10 +79,14 @@ export function TournamentIdentityBanner({
         ) : null}
       </div>
 
-      <div className="min-w-0 text-center space-y-0.5">
+      <div className="min-w-0 text-center space-y-0.5 flex flex-col justify-center">
         <div
-          className={`font-display font-bold tracking-wider uppercase text-yellow-300 truncate ${
-            compact ? 'text-sm sm:text-lg' : 'text-lg sm:text-2xl'
+          className={`font-display font-bold tracking-wider uppercase text-yellow-300 ${
+            compact
+              ? 'text-sm sm:text-lg truncate'
+              : details.length === 0
+              ? 'text-xl sm:text-2xl md:text-3xl lg:text-4xl leading-tight line-clamp-2'
+              : 'text-lg sm:text-2xl truncate'
           }`}
         >
           {arena.tournamentName}

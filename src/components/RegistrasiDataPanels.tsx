@@ -8,8 +8,10 @@ import {
   FileSpreadsheet,
   GitBranch,
   GripVertical,
+  ImagePlus,
   Layers,
   Lock,
+  Pencil,
   Play,
   Plus,
   RotateCcw,
@@ -21,10 +23,13 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { readAndResizeAthletePhoto, resolveAthletePhoto } from '../utils/athletePhotos';
+import { CountryFlag, INTERNATIONAL_COUNTRIES, resolveCountryInfo } from '../utils/countries';
 import { useArena } from '../context/ArenaContext';
 import type {
   ArenaCourt,
   AthleteAgeCategory,
+  AthleteData,
   AthleteGender,
   BracketMatchSlot,
   BracketMode,
@@ -45,12 +50,14 @@ import {
 } from '../utils/athleteExcel';
 import {
   JURUS_DEFAULT_DURATION_SEC,
+  JURUS_JUDGE_COUNT_OPTIONS,
   computeCornerJurusSummary,
   ensureJurusState,
   formatJurusElapsedMs,
   formatJurusScore,
   formatMatchScore,
   formatMatchTime,
+  getJurusJudgeCount,
   getJurusType,
   isJurusMatch,
 } from '../utils/ipsiRules';
@@ -67,14 +74,21 @@ export function InputAtletPanel() {
   const {
     athletes,
     matches,
+    activeMatch,
     addAthlete,
+    updateAthlete,
     importAthletes,
     deleteAthlete,
     clearAthletes,
     applyLotingMatchAssignments,
+    updateMatchMeta,
   } = useArena();
   const [name, setName] = useState('');
   const [contingent, setContingent] = useState('');
+  const [country, setCountry] = useState('IDN');
+  const [photo, setPhoto] = useState('');
+  const [photoError, setPhotoError] = useState('');
+  const [editingAthleteId, setEditingAthleteId] = useState<string | null>(null);
   const [ageCategory, setAgeCategory] = useState<AthleteAgeCategory>('Dewasa');
   const [gender, setGender] = useState<AthleteGender>('Putra');
   const [competitionCategory, setCompetitionCategory] = useState<CompetitionCategory>('Tanding');
@@ -86,6 +100,7 @@ export function InputAtletPanel() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // State Menu Loting Partai
   const [showLotingModal, setShowLotingModal] = useState(false);
@@ -103,6 +118,76 @@ export function InputAtletPanel() {
     [competitionCategory, ageCategory]
   );
 
+  const selectedCountryInfo = useMemo(
+    () => resolveCountryInfo(country, contingent),
+    [country, contingent]
+  );
+
+  const resetFormFields = () => {
+    setName('');
+    setContingent('');
+    setCountry('IDN');
+    setPhoto('');
+    setPhotoError('');
+    setEditingAthleteId(null);
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setPhotoError('');
+    try {
+      const dataUrl = await readAndResizeAthletePhoto(file);
+      setPhoto(dataUrl);
+    } catch (err) {
+      setPhotoError(
+        err instanceof Error ? err.message : 'Gagal memproses foto atlet.'
+      );
+    }
+  };
+
+  const handleEditAthlete = (ath: AthleteData) => {
+    setEditingAthleteId(ath.id);
+    setName(ath.name);
+    setContingent(ath.contingent);
+    setCountry(resolveCountryInfo(ath.country, ath.contingent).code);
+    setPhoto(ath.photo || '');
+    setPhotoError('');
+    setAgeCategory(ath.ageCategory || 'Dewasa');
+    setGender(ath.gender || 'Putra');
+    setCompetitionCategory(ath.competitionCategory || 'Tanding');
+    setWeightClass(ath.weightClass);
+    setGelanggang(ath.gelanggang || 'A');
+    setError('');
+    setFeedback(`Mode ubah aktif untuk ${ath.name}. Perbarui data lalu tekan Simpan Perubahan.`);
+  };
+
+  const handleSyncToScoreboardCorner = async (ath: AthleteData, corner: 'blue' | 'red') => {
+    const athCountry = resolveCountryInfo(ath.country, ath.contingent).code;
+    await updateMatchMeta(
+      activeMatch.id,
+      corner === 'blue'
+        ? {
+            blueName: ath.name,
+            blueContingent: ath.contingent,
+            blueCountry: athCountry,
+            bluePhoto: ath.photo || '',
+          }
+        : {
+            redName: ath.name,
+            redContingent: ath.contingent,
+            redCountry: athCountry,
+            redPhoto: ath.photo || '',
+          }
+    );
+    setFeedback(
+      `${ath.name} (${athCountry}) disinkronkan ke ${
+        corner === 'blue' ? 'Sudut Biru' : 'Sudut Merah'
+      } Scoreboard (${activeMatch.matchNumber}).`
+    );
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !contingent.trim() || !weightClass.trim()) {
@@ -111,18 +196,38 @@ export function InputAtletPanel() {
     }
     setError('');
     setFeedback('');
+
+    const normalizedCountry = resolveCountryInfo(country, contingent).code;
+    if (editingAthleteId) {
+      await updateAthlete(editingAthleteId, {
+        name,
+        contingent,
+        country: normalizedCountry,
+        photo,
+        weightClass,
+        gender,
+        ageCategory,
+        competitionCategory,
+        gelanggang,
+      });
+      resetFormFields();
+      setFeedback('Data, foto & negara atlet berhasil diperbarui dan disinkronkan ke partai aktif.');
+      return;
+    }
+
     await addAthlete({
       name,
       contingent,
+      country: normalizedCountry,
+      photo,
       weightClass,
       gender,
       ageCategory,
       competitionCategory,
       gelanggang,
     });
-    setName('');
-    setContingent('');
-    setFeedback('Atlet berhasil ditambahkan.');
+    resetFormFields();
+    setFeedback('Atlet berhasil ditambahkan dan siap disinkronkan ke Scoreboard.');
   };
 
   const handleImportChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,8 +305,12 @@ export function InputAtletPanel() {
       status: m.status,
       blueName: m.blueName,
       blueContingent: m.blueContingent,
+      blueCountry: m.blueCountry,
+      bluePhoto: m.bluePhoto,
       redName: m.redName,
       redContingent: m.redContingent,
+      redCountry: m.redCountry,
+      redPhoto: m.redPhoto,
     }));
 
   const openLotingMenu = () => {
@@ -285,8 +394,12 @@ export function InputAtletPanel() {
           matchId: d.id,
           blueName: d.blueName,
           blueContingent: d.blueContingent,
+          blueCountry: d.blueCountry,
+          bluePhoto: d.bluePhoto,
           redName: d.redName,
           redContingent: d.redContingent,
+          redCountry: d.redCountry,
+          redPhoto: d.redPhoto,
         }))
       );
       setLotingDirty(false);
@@ -310,9 +423,25 @@ export function InputAtletPanel() {
         onSubmit={handleSubmit}
         className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-3.5 space-y-3"
       >
-        <div className="flex items-center gap-2">
-          <UserPlus className="w-4 h-4 text-yellow-300" />
-          <h2 className="font-display text-lg font-bold text-yellow-300">Input Atlet</h2>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <UserPlus className="w-4 h-4 text-yellow-300" />
+            <h2 className="font-display text-lg font-bold text-yellow-300">
+              {editingAthleteId ? 'Ubah Data Atlet' : 'Input Atlet'}
+            </h2>
+          </div>
+          {editingAthleteId && (
+            <button
+              type="button"
+              onClick={() => {
+                resetFormFields();
+                setFeedback('');
+              }}
+              className="px-2 py-0.5 rounded-md bg-purple-950 hover:bg-purple-900 border border-purple-500/50 text-[10px] font-bold text-blue-200 cursor-pointer"
+            >
+              Batal Ubah
+            </button>
+          )}
         </div>
 
         {error && (
@@ -327,6 +456,67 @@ export function InputAtletPanel() {
         )}
 
         <div className="space-y-2.5">
+          {/* Upload Foto Atlet & Preview */}
+          <div className="rounded-xl bg-black/55 border border-purple-700/55 p-2.5 flex items-center gap-2.5">
+            <div className="relative w-14 h-18 rounded-lg overflow-hidden border border-blue-400/50 bg-[#070b18] shrink-0">
+              <img
+                src={resolveAthletePhoto(photo, 'blue', weightClass).src}
+                alt="Preview Foto Atlet"
+                className="w-full h-full object-cover object-top"
+              />
+              {!photo && (
+                <span className="absolute bottom-0 inset-x-0 bg-black/75 text-[8px] font-bold uppercase tracking-wider text-center text-blue-200 py-0.5">
+                  Default
+                </span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="text-[11px] font-medium text-blue-200">
+                Foto Atlet (Scoreboard)
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  data-testid="upload-athlete-photo-btn"
+                  className="min-h-[30px] px-2.5 py-1 rounded-lg bg-blue-950/90 hover:bg-blue-900 border border-blue-500/50 hover:border-yellow-400 text-[11px] font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <ImagePlus className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+                  <span>{photo ? 'Ganti Foto' : 'Upload Foto'}</span>
+                </button>
+                {photo && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPhoto('');
+                      setPhotoError('');
+                    }}
+                    aria-label="Hapus foto atlet"
+                    className="min-h-[30px] px-2 py-1 rounded-lg bg-red-950/75 hover:bg-red-900 border border-red-500/50 text-[11px] font-semibold text-rose-200 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>Hapus</span>
+                  </button>
+                )}
+              </div>
+              <input
+                ref={photoInputRef}
+                aria-label="Upload Foto Atlet"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => void handlePhotoUpload(e)}
+                className="sr-only"
+              />
+              {photoError ? (
+                <p className="text-[10px] text-red-300 leading-tight">{photoError}</p>
+              ) : (
+                <p className="text-[10px] text-blue-300/70 leading-tight">
+                  JPG/PNG/WEBP, otomatis dikompresi &amp; sinkron ke Scoreboard.
+                </p>
+              )}
+            </div>
+          </div>
+
           <div>
             <label htmlFor="athlete-name" className="block text-[11px] font-medium text-blue-200 mb-1">
               Nama Atlet
@@ -355,6 +545,33 @@ export function InputAtletPanel() {
               maxLength={80}
               className="w-full min-h-[36px] px-2.5 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs text-white placeholder:text-blue-300/60 focus:outline-none focus:border-yellow-400"
             />
+          </div>
+
+          <div>
+            <label htmlFor="athlete-country" className="block text-[11px] font-medium text-blue-200 mb-1">
+              Negara Asal
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="min-h-[36px] px-2 rounded-lg bg-black/65 border border-blue-500/45 flex items-center justify-center shrink-0">
+                <CountryFlag
+                  code={selectedCountryInfo.code}
+                  name={selectedCountryInfo.name}
+                  className="w-6 h-4"
+                />
+              </div>
+              <select
+                id="athlete-country"
+                value={selectedCountryInfo.code}
+                onChange={(e) => setCountry(e.target.value)}
+                className="w-full min-h-[36px] px-2 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs text-white focus:outline-none focus:border-yellow-400"
+              >
+                {INTERNATIONAL_COUNTRIES.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.code} - {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -469,8 +686,8 @@ export function InputAtletPanel() {
           type="submit"
           className="w-full min-h-[38px] px-3 py-2 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
         >
-          <Plus className="w-4 h-4" />
-          <span>Simpan Atlet</span>
+          {editingAthleteId ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+          <span>{editingAthleteId ? 'Simpan Perubahan' : 'Simpan Atlet'}</span>
         </button>
       </form>
 
@@ -605,12 +822,12 @@ export function InputAtletPanel() {
               <thead>
                 <tr className="bg-purple-950/75 border-b border-purple-700/70 divide-x divide-purple-700/75 text-[10px] font-bold uppercase tracking-wide text-yellow-300">
                   <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Partai</th>
-                  <th className="py-1.5 px-2 text-center">Nama Atlet / Kontingen</th>
+                  <th className="py-1.5 px-2 text-left">Atlet / Negara / Kontingen</th>
                   <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Gender</th>
                   <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Kategori Usia</th>
                   <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Disiplin</th>
                   <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Gelanggang</th>
-                  <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Aksi</th>
+                  <th className="py-1.5 px-1.5 text-center whitespace-nowrap">Aksi &amp; Sync</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-purple-800/50">
@@ -619,6 +836,8 @@ export function InputAtletPanel() {
                   const disiplinLabel = a.competitionCategory || 'Tanding';
                   const ageLabel = a.ageCategory || 'Dewasa';
                   const gelanggangLabel = `Gel. ${a.gelanggang || 'A'}`;
+                  const countryInfo = resolveCountryInfo(a.country, a.contingent);
+                  const photoPreview = resolveAthletePhoto(a.photo, 'blue', a.weightClass);
                   return (
                     <tr
                       key={a.id}
@@ -627,10 +846,33 @@ export function InputAtletPanel() {
                       <td className="py-1 px-1.5 text-center whitespace-nowrap font-mono font-bold text-yellow-300">
                         {partaiLabel}
                       </td>
-                      <td className="py-1 px-2 text-center min-w-0 max-w-[190px] xl:max-w-[260px]">
-                        <div className="font-bold text-white leading-tight truncate">{a.name}</div>
-                        <div className="text-[10px] text-blue-200/85 leading-tight truncate">
-                          {a.contingent} &middot; {a.weightClass}
+                      <td className="py-1 px-2 text-left min-w-0 max-w-[230px] xl:max-w-[290px]">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="relative w-8 h-10 rounded-md overflow-hidden border border-purple-500/50 bg-black shrink-0">
+                            <img
+                              src={photoPreview.src}
+                              alt={a.name}
+                              className="w-full h-full object-cover object-top"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <CountryFlag
+                                code={countryInfo.code}
+                                name={countryInfo.name}
+                                className="w-4 h-3 shrink-0"
+                              />
+                              <span className="font-mono text-[9px] font-extrabold text-yellow-300 shrink-0">
+                                {countryInfo.code}
+                              </span>
+                              <span className="font-bold text-white leading-tight truncate">
+                                {a.name}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-blue-200/85 leading-tight truncate">
+                              {a.contingent} &middot; {a.weightClass}
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className="py-1 px-1.5 text-center whitespace-nowrap font-semibold text-[11px] text-yellow-300">
@@ -650,15 +892,42 @@ export function InputAtletPanel() {
                         {gelanggangLabel}
                       </td>
                       <td className="py-1 px-1.5 text-center whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => void deleteAthlete(a.id)}
-                          aria-label={`Hapus ${a.name}`}
-                          title={`Hapus ${a.name}`}
-                          className="min-h-[26px] min-w-[26px] inline-flex items-center justify-center rounded-lg bg-blue-950/80 hover:bg-red-700 border border-blue-500/45 text-yellow-300 hover:text-white cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleSyncToScoreboardCorner(a, 'blue')}
+                            title={`Pasang ${a.name} ke Sudut Biru (${activeMatch.matchNumber})`}
+                            className="min-h-[26px] px-1.5 rounded-md bg-blue-700/85 hover:bg-blue-600 border border-sky-400/55 text-[10px] font-bold text-white cursor-pointer transition-colors"
+                          >
+                            Biru
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleSyncToScoreboardCorner(a, 'red')}
+                            title={`Pasang ${a.name} ke Sudut Merah (${activeMatch.matchNumber})`}
+                            className="min-h-[26px] px-1.5 rounded-md bg-red-700/85 hover:bg-red-600 border border-rose-400/55 text-[10px] font-bold text-white cursor-pointer transition-colors"
+                          >
+                            Merah
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleEditAthlete(a)}
+                            aria-label={`Ubah ${a.name}`}
+                            title={`Ubah data & foto ${a.name}`}
+                            className="min-h-[26px] min-w-[26px] inline-flex items-center justify-center rounded-lg bg-blue-950/80 hover:bg-yellow-400 border border-blue-500/45 text-blue-200 hover:text-black cursor-pointer transition-colors"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteAthlete(a.id)}
+                            aria-label={`Hapus ${a.name}`}
+                            title={`Hapus ${a.name}`}
+                            className="min-h-[26px] min-w-[26px] inline-flex items-center justify-center rounded-lg bg-blue-950/80 hover:bg-red-700 border border-blue-500/45 text-yellow-300 hover:text-white cursor-pointer transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1574,6 +1843,7 @@ export function KontrolPartaiPanel() {
     updateMatchMeta,
     setActiveMatch,
     setMatchTotalRounds,
+    setMatchJurusJudgeCount,
     resetMatch,
     deleteMatch,
   } = useArena();
@@ -1582,6 +1852,7 @@ export function KontrolPartaiPanel() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newCategory, setNewCategory] = useState<CompetitionCategory>('Jurus');
   const [newJurusType, setNewJurusType] = useState<JurusCategory>('Tunggal Baku');
+  const [newJurusJudgeCount, setNewJurusJudgeCount] = useState<number>(4);
   const [newGender, setNewGender] = useState<AthleteGender>('Putra');
   const [newTandingClass, setNewTandingClass] = useState('Kelas B (50-55 kg)');
   const [newTotalRounds, setNewTotalRounds] = useState<2 | 3>(3);
@@ -1589,22 +1860,65 @@ export function KontrolPartaiPanel() {
   const [newStage, setNewStage] = useState('Final');
   const [newBlueName, setNewBlueName] = useState('');
   const [newBlueContingent, setNewBlueContingent] = useState('');
+  const [newBlueCountry, setNewBlueCountry] = useState('IDN');
+  const [newBluePhoto, setNewBluePhoto] = useState('');
   const [newRedName, setNewRedName] = useState('');
   const [newRedContingent, setNewRedContingent] = useState('');
+  const [newRedCountry, setNewRedCountry] = useState('IDN');
+  const [newRedPhoto, setNewRedPhoto] = useState('');
   const [newSetActive, setNewSetActive] = useState(true);
   const [createError, setCreateError] = useState('');
+
+  // Quick profile editor for selected match (Athlete photo & country for Scoreboard)
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editBlueName, setEditBlueName] = useState('');
+  const [editBlueContingent, setEditBlueContingent] = useState('');
+  const [editBlueCountry, setEditBlueCountry] = useState('IDN');
+  const [editBluePhoto, setEditBluePhoto] = useState('');
+  const [editRedName, setEditRedName] = useState('');
+  const [editRedContingent, setEditRedContingent] = useState('');
+  const [editRedCountry, setEditRedCountry] = useState('IDN');
+  const [editRedPhoto, setEditRedPhoto] = useState('');
 
   const selectedMatch = useMemo(
     () => matches.find((m) => m.id === selectedMatchId) || activeMatch,
     [matches, selectedMatchId, activeMatch]
   );
 
+  const openProfileEditor = () => {
+    setEditBlueName(selectedMatch.blueName);
+    setEditBlueContingent(selectedMatch.blueContingent);
+    setEditBlueCountry(selectedMatch.blueCountry || 'IDN');
+    setEditBluePhoto(selectedMatch.bluePhoto || '');
+    setEditRedName(selectedMatch.redName);
+    setEditRedContingent(selectedMatch.redContingent);
+    setEditRedCountry(selectedMatch.redCountry || 'IDN');
+    setEditRedPhoto(selectedMatch.redPhoto || '');
+    setEditingProfile((v) => !v);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await updateMatchMeta(selectedMatch.id, {
+      blueName: editBlueName.trim() || selectedMatch.blueName,
+      blueContingent: editBlueContingent.trim() || selectedMatch.blueContingent,
+      blueCountry: editBlueCountry.trim() || 'IDN',
+      bluePhoto: editBluePhoto,
+      redName: editRedName.trim() || selectedMatch.redName,
+      redContingent: editRedContingent.trim() || selectedMatch.redContingent,
+      redCountry: editRedCountry.trim() || 'IDN',
+      redPhoto: editRedPhoto,
+    });
+    setEditingProfile(false);
+  };
+
   const isSelectedActive = selectedMatch.id === activeMatch.id;
   const isSelectedJurus = isJurusMatch(selectedMatch);
   const selectedJurusType = getJurusType(selectedMatch);
+  const selectedJurusJudgeCount = getJurusJudgeCount(selectedMatch);
   const selectedJurusState = ensureJurusState(selectedMatch);
-  const selectedBlueSummary = computeCornerJurusSummary(selectedJurusType, selectedJurusState.blue);
-  const selectedRedSummary = computeCornerJurusSummary(selectedJurusType, selectedJurusState.red);
+  const selectedBlueSummary = computeCornerJurusSummary(selectedJurusType, selectedJurusState.blue, selectedJurusJudgeCount);
+  const selectedRedSummary = computeCornerJurusSummary(selectedJurusType, selectedJurusState.red, selectedJurusJudgeCount);
 
   const selectedEvents = useMemo(
     () => (isSelectedActive ? events : getMatchEvents(selectedMatch.id)),
@@ -1633,19 +1947,28 @@ export function KontrolPartaiPanel() {
       stage: newStage.trim() || 'Final',
       competitionCategory: newCategory,
       jurusType: isJurus ? newJurusType : undefined,
+      jurusJudgeCount: isJurus ? newJurusJudgeCount : undefined,
       totalRounds: isJurus ? 1 : newTotalRounds,
       blueName: newBlueName.trim(),
       blueContingent: newBlueContingent.trim() || '-',
+      blueCountry: newBlueCountry,
+      bluePhoto: newBluePhoto,
       redName: newRedName.trim(),
       redContingent: newRedContingent.trim() || '-',
+      redCountry: newRedCountry,
+      redPhoto: newRedPhoto,
       roundDurationSec: isJurus ? JURUS_DEFAULT_DURATION_SEC : 120,
       setAsActive: newSetActive,
     });
     setNewMatchNumber('');
     setNewBlueName('');
     setNewBlueContingent('');
+    setNewBlueCountry('IDN');
+    setNewBluePhoto('');
     setNewRedName('');
     setNewRedContingent('');
+    setNewRedCountry('IDN');
+    setNewRedPhoto('');
     setShowCreateForm(false);
   };
 
@@ -1747,7 +2070,7 @@ export function KontrolPartaiPanel() {
             </div>
 
             {newCategory === 'Jurus' ? (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
                   <label className="block text-[11px] text-blue-200 mb-1">Kategori Jurus TGRS</label>
                   <select
@@ -1771,6 +2094,22 @@ export function KontrolPartaiPanel() {
                   >
                     <option value="Putra">Putra</option>
                     <option value="Putri">Putri</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-blue-200 mb-1">Jumlah Juri (4–10)</label>
+                  <select
+                    aria-label="Jumlah Juri TGRS Baru"
+                    data-testid="create-jurus-judge-count"
+                    value={newJurusJudgeCount}
+                    onChange={(e) => setNewJurusJudgeCount(Number(e.target.value))}
+                    className="w-full min-h-[36px] px-2.5 rounded-lg bg-black/70 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300"
+                  >
+                    {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
+                      <option key={cnt} value={cnt}>
+                        {cnt} Juri
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1829,6 +2168,46 @@ export function KontrolPartaiPanel() {
                   maxLength={80}
                   className="w-full min-h-[34px] px-2 rounded bg-black/70 border border-blue-500/40 text-xs text-white"
                 />
+                <select
+                  aria-label="Negara Sudut Biru"
+                  value={newBlueCountry}
+                  onChange={(e) => setNewBlueCountry(e.target.value)}
+                  className="w-full min-h-[34px] px-2 rounded bg-black/70 border border-blue-500/40 text-xs text-white"
+                >
+                  {INTERNATIONAL_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-1.5">
+                  <label className="flex-1 min-h-[30px] px-2 rounded bg-blue-900/60 hover:bg-blue-800 border border-blue-500/40 text-[11px] font-semibold text-white flex items-center justify-center gap-1 cursor-pointer">
+                    <ImagePlus className="w-3.5 h-3.5 text-yellow-300" />
+                    <span>{newBluePhoto ? 'Ganti Foto' : 'Foto Atlet'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) {
+                          void readAndResizeAthletePhoto(file).then(setNewBluePhoto).catch(() => {});
+                        }
+                      }}
+                    />
+                  </label>
+                  {newBluePhoto && (
+                    <button
+                      type="button"
+                      onClick={() => setNewBluePhoto('')}
+                      className="min-h-[30px] px-2 rounded bg-black/70 border border-blue-500/40 text-[11px] text-yellow-300 cursor-pointer"
+                      aria-label="Hapus Foto Biru"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5 p-2 rounded-lg bg-red-950/35 border border-red-700/50">
@@ -1849,6 +2228,46 @@ export function KontrolPartaiPanel() {
                   maxLength={80}
                   className="w-full min-h-[34px] px-2 rounded bg-black/70 border border-red-500/40 text-xs text-white"
                 />
+                <select
+                  aria-label="Negara Sudut Merah"
+                  value={newRedCountry}
+                  onChange={(e) => setNewRedCountry(e.target.value)}
+                  className="w-full min-h-[34px] px-2 rounded bg-black/70 border border-red-500/40 text-xs text-white"
+                >
+                  {INTERNATIONAL_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-1.5">
+                  <label className="flex-1 min-h-[30px] px-2 rounded bg-red-900/60 hover:bg-red-800 border border-red-500/40 text-[11px] font-semibold text-white flex items-center justify-center gap-1 cursor-pointer">
+                    <ImagePlus className="w-3.5 h-3.5 text-yellow-300" />
+                    <span>{newRedPhoto ? 'Ganti Foto' : 'Foto Atlet'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) {
+                          void readAndResizeAthletePhoto(file).then(setNewRedPhoto).catch(() => {});
+                        }
+                      }}
+                    />
+                  </label>
+                  {newRedPhoto && (
+                    <button
+                      type="button"
+                      onClick={() => setNewRedPhoto('')}
+                      className="min-h-[30px] px-2 rounded bg-black/70 border border-red-500/40 text-[11px] text-yellow-300 cursor-pointer"
+                      aria-label="Hapus Foto Merah"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1945,9 +2364,30 @@ export function KontrolPartaiPanel() {
 
           <div className="flex flex-wrap items-center gap-2">
             {isSelectedJurus ? (
-              <span className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/50 text-xs font-mono font-semibold text-yellow-300 flex items-center">
-                {selectedMatch.roundDurationSec}s (TGRS)
-              </span>
+              <>
+                <span className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/50 text-xs font-mono font-semibold text-yellow-300 flex items-center">
+                  {selectedMatch.roundDurationSec}s (TGRS)
+                </span>
+                <select
+                  aria-label={`Jumlah Juri ${selectedMatch.matchNumber}`}
+                  data-testid="sekretaris-jurus-judge-count"
+                  value={selectedMatch.jurusJudgeCount ?? 3}
+                  disabled={selectedMatch.status === 'finished'}
+                  onChange={(e) =>
+                    void setMatchJurusJudgeCount(selectedMatch.id, Number(e.target.value))
+                  }
+                  className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300 disabled:opacity-50 cursor-pointer"
+                >
+                  {!selectedMatch.jurusJudgeCount && (
+                    <option value={3}>3 Juri (Awal — Pilih 4–10)</option>
+                  )}
+                  {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
+                    <option key={cnt} value={cnt}>
+                      {cnt} Juri
+                    </option>
+                  ))}
+                </select>
+              </>
             ) : (
               <select
                 aria-label={`Jumlah Babak ${selectedMatch.matchNumber}`}
@@ -2089,6 +2529,14 @@ export function KontrolPartaiPanel() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openProfileEditor}
+              className="min-h-[34px] px-2.5 py-1 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-500/45 hover:border-yellow-400 text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5 text-yellow-300" />
+              <span>{editingProfile ? 'Tutup Editor' : 'Foto & Negara'}</span>
+            </button>
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs font-mono tabular-nums text-yellow-300">
               <Clock className="w-3.5 h-3.5" />
               <span>{formatMatchTime(selectedTimerMs)}</span>
@@ -2104,6 +2552,157 @@ export function KontrolPartaiPanel() {
             </span>
           </div>
         </div>
+
+        {/* Editor Foto, Negara & Nama Atlet untuk Tampilan Scoreboard Internasional */}
+        {editingProfile && (
+          <form
+            onSubmit={handleSaveProfile}
+            className="rounded-xl bg-black/75 border border-yellow-400/55 p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-yellow-300">
+                Profil Atlet &amp; Negara (Tampil di Scoreboard)
+              </span>
+              <button
+                type="submit"
+                className="min-h-[32px] px-3 py-1 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold cursor-pointer"
+              >
+                Simpan Profil
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-xl bg-blue-950/35 border border-blue-600/50 p-3 space-y-2">
+                <div className="text-[11px] font-bold uppercase text-blue-300">Sudut Biru</div>
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src={editBluePhoto || resolveAthletePhoto(undefined, 'blue', selectedMatch.weightClass).src}
+                    alt={editBlueName}
+                    className="w-12 h-14 object-cover object-top rounded-lg border border-blue-400/60 bg-black shrink-0"
+                  />
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <label className="min-h-[30px] px-2.5 rounded-lg bg-blue-900/70 hover:bg-blue-800 border border-blue-500/50 text-[11px] font-semibold text-white flex items-center justify-center gap-1.5 cursor-pointer">
+                      <ImagePlus className="w-3.5 h-3.5 text-yellow-300" />
+                      <span>{editBluePhoto ? 'Ganti Foto Atlet' : 'Upload Foto Atlet'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (file) {
+                            void readAndResizeAthletePhoto(file).then(setEditBluePhoto).catch(() => {});
+                          }
+                        }}
+                      />
+                    </label>
+                    {editBluePhoto && (
+                      <button
+                        type="button"
+                        onClick={() => setEditBluePhoto('')}
+                        className="text-[11px] text-yellow-300 hover:text-yellow-200 text-left cursor-pointer"
+                      >
+                        Pakai Foto Default
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  value={editBlueName}
+                  onChange={(e) => setEditBlueName(e.target.value)}
+                  placeholder="Nama Pesilat Biru"
+                  maxLength={80}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-blue-500/40 text-xs text-white"
+                />
+                <input
+                  type="text"
+                  value={editBlueContingent}
+                  onChange={(e) => setEditBlueContingent(e.target.value)}
+                  placeholder="Kontingen"
+                  maxLength={80}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-blue-500/40 text-xs text-white"
+                />
+                <select
+                  value={editBlueCountry}
+                  onChange={(e) => setEditBlueCountry(e.target.value)}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-blue-500/40 text-xs text-white"
+                >
+                  {INTERNATIONAL_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="rounded-xl bg-red-950/35 border border-red-600/50 p-3 space-y-2">
+                <div className="text-[11px] font-bold uppercase text-red-300">Sudut Merah</div>
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src={editRedPhoto || resolveAthletePhoto(undefined, 'red', selectedMatch.weightClass).src}
+                    alt={editRedName}
+                    className="w-12 h-14 object-cover object-top rounded-lg border border-red-400/60 bg-black shrink-0"
+                  />
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <label className="min-h-[30px] px-2.5 rounded-lg bg-red-900/70 hover:bg-red-800 border border-red-500/50 text-[11px] font-semibold text-white flex items-center justify-center gap-1.5 cursor-pointer">
+                      <ImagePlus className="w-3.5 h-3.5 text-yellow-300" />
+                      <span>{editRedPhoto ? 'Ganti Foto Atlet' : 'Upload Foto Atlet'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (file) {
+                            void readAndResizeAthletePhoto(file).then(setEditRedPhoto).catch(() => {});
+                          }
+                        }}
+                      />
+                    </label>
+                    {editRedPhoto && (
+                      <button
+                        type="button"
+                        onClick={() => setEditRedPhoto('')}
+                        className="text-[11px] text-yellow-300 hover:text-yellow-200 text-left cursor-pointer"
+                      >
+                        Pakai Foto Default
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  value={editRedName}
+                  onChange={(e) => setEditRedName(e.target.value)}
+                  placeholder="Nama Pesilat Merah"
+                  maxLength={80}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-red-500/40 text-xs text-white"
+                />
+                <input
+                  type="text"
+                  value={editRedContingent}
+                  onChange={(e) => setEditRedContingent(e.target.value)}
+                  placeholder="Kontingen"
+                  maxLength={80}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-red-500/40 text-xs text-white"
+                />
+                <select
+                  value={editRedCountry}
+                  onChange={(e) => setEditRedCountry(e.target.value)}
+                  className="w-full min-h-[34px] px-2.5 rounded bg-black/70 border border-red-500/40 text-xs text-white"
+                >
+                  {INTERNATIONAL_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </form>
+        )}
 
         {/* Pratinjau Sudut Biru vs Sudut Merah */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2125,9 +2724,27 @@ export function KontrolPartaiPanel() {
                 </span>
               )}
             </div>
-            <div>
-              <div className="text-base font-bold text-white truncate">{selectedMatch.blueName}</div>
-              <div className="text-xs text-blue-200/85 truncate">{selectedMatch.blueContingent}</div>
+            <div className="flex items-center gap-3 min-w-0">
+              <img
+                src={resolveAthletePhoto(selectedMatch.bluePhoto, 'blue', selectedMatch.weightClass).src}
+                alt={selectedMatch.blueName}
+                className="w-11 h-14 object-cover object-top rounded-lg border border-blue-400/50 bg-black shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {(() => {
+                    const c = resolveCountryInfo(selectedMatch.blueCountry, selectedMatch.blueContingent);
+                    return (
+                      <>
+                        <CountryFlag code={c.code} name={c.name} className="w-5 h-3.5" />
+                        <span className="text-[10px] font-mono font-bold text-blue-200">{c.code}</span>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="text-base font-bold text-white truncate">{selectedMatch.blueName}</div>
+                <div className="text-xs text-blue-200/85 truncate">{selectedMatch.blueContingent}</div>
+              </div>
             </div>
             <div className="font-mono text-4xl font-extrabold text-blue-200 tabular-nums">
               {formatMatchScore(selectedMatch, 'blue')}
@@ -2169,9 +2786,27 @@ export function KontrolPartaiPanel() {
                 </span>
               )}
             </div>
-            <div>
-              <div className="text-base font-bold text-white truncate">{selectedMatch.redName}</div>
-              <div className="text-xs text-red-200/85 truncate">{selectedMatch.redContingent}</div>
+            <div className="flex items-center gap-3 min-w-0">
+              <img
+                src={resolveAthletePhoto(selectedMatch.redPhoto, 'red', selectedMatch.weightClass).src}
+                alt={selectedMatch.redName}
+                className="w-11 h-14 object-cover object-top rounded-lg border border-red-400/50 bg-black shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {(() => {
+                    const c = resolveCountryInfo(selectedMatch.redCountry, selectedMatch.redContingent);
+                    return (
+                      <>
+                        <CountryFlag code={c.code} name={c.name} className="w-5 h-3.5" />
+                        <span className="text-[10px] font-mono font-bold text-red-200">{c.code}</span>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="text-base font-bold text-white truncate">{selectedMatch.redName}</div>
+                <div className="text-xs text-red-200/85 truncate">{selectedMatch.redContingent}</div>
+              </div>
             </div>
             <div className="font-mono text-4xl font-extrabold text-red-200 tabular-nums">
               {formatMatchScore(selectedMatch, 'red')}

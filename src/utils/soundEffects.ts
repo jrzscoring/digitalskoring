@@ -1,3 +1,23 @@
+const SOUND_MUTED_STORAGE_KEY = 'jrz_sound_muted';
+
+export function isSoundMuted(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(SOUND_MUTED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setSoundMuted(muted: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SOUND_MUTED_STORAGE_KEY, muted ? '1' : '0');
+  } catch {
+    // ignore storage errors
+  }
+}
+
 let audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext | null {
@@ -15,6 +35,7 @@ function getAudioContext(): AudioContext | null {
 }
 
 export function playArenaGong(): void {
+  if (isSoundMuted()) return;
   const ctx = getAudioContext();
   if (!ctx) return;
 
@@ -43,6 +64,7 @@ export function playArenaGong(): void {
 }
 
 export function playConsensusChime(): void {
+  if (isSoundMuted()) return;
   const ctx = getAudioContext();
   if (!ctx) return;
 
@@ -62,3 +84,28 @@ export function playConsensusChime(): void {
   osc.start(now);
   osc.stop(now + 0.28);
 }
+
+export function playBreakBuzzer(): void {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  const pulses = [0, 0.28];
+  pulses.forEach((offset) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(440, now + offset);
+
+    gain.gain.setValueAtTime(0.001, now + offset);
+    gain.gain.linearRampToValueAtTime(0.18, now + offset + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.22);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + offset);
+    osc.stop(now + offset + 0.24);
+  });
+}
+

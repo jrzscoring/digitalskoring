@@ -5,6 +5,7 @@ import { SekretarisView } from './components/SekretarisView';
 import { DewanView } from './components/DewanView';
 import { TimerView } from './components/TimerView';
 import { JuriView } from './components/JuriView';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { ScoreboardView } from './components/ScoreboardView';
 import type { AppView } from './types/silat';
 
@@ -58,6 +59,8 @@ export default function App() {
       {view === 'timer' && <TimerView onNavigate={navigate} />}
       {view === 'juri' && <JuriView onNavigate={navigate} />}
       {view === 'scoreboard' && <ScoreboardView onNavigate={navigate} />}
+      <OfflineIndicator />
     </ArenaProvider>
   );
 }
+

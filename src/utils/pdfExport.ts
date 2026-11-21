@@ -7,6 +7,8 @@ import {
   formatJurusElapsedMs,
   formatJurusScore,
   formatMatchScore,
+  getJurusJudgeCount,
+  getJurusJudgeIds,
   getJurusType,
   isJurusMatch,
 } from './ipsiRules';
@@ -60,9 +62,11 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
 
   const isJurus = isJurusMatch(match);
   const jurusType = getJurusType(match);
+  const jurusJudgeCount = getJurusJudgeCount(match);
+  const jurusJudgeIds = getJurusJudgeIds(jurusJudgeCount);
   const jState = ensureJurusState(match);
-  const blueJurus = computeCornerJurusSummary(jurusType, jState.blue);
-  const redJurus = computeCornerJurusSummary(jurusType, jState.red);
+  const blueJurus = computeCornerJurusSummary(jurusType, jState.blue, jurusJudgeCount);
+  const redJurus = computeCornerJurusSummary(jurusType, jState.red, jurusJudgeCount);
 
   // Match Identity Table
   doc.setTextColor(15, 23, 42);
@@ -91,9 +95,11 @@ export function exportMatchPdf(arena: ArenaData, match: MatchData, events: Match
     body: isJurus
       ? [
           ['Kontingen / Daerah', match.blueContingent, match.redContingent],
-          ['Nilai Juri 1', formatJurusScore(blueJurus.judgeTotals[0]), formatJurusScore(redJurus.judgeTotals[0])],
-          ['Nilai Juri 2', formatJurusScore(blueJurus.judgeTotals[1]), formatJurusScore(redJurus.judgeTotals[1])],
-          ['Nilai Juri 3', formatJurusScore(blueJurus.judgeTotals[2]), formatJurusScore(redJurus.judgeTotals[2])],
+          ...jurusJudgeIds.map((jid, idx) => [
+            `Nilai Juri ${jid}`,
+            formatJurusScore(blueJurus.judgeTotals[idx] ?? 0),
+            formatJurusScore(redJurus.judgeTotals[idx] ?? 0),
+          ]),
           ['Median Juri', formatJurusScore(blueJurus.median), formatJurusScore(redJurus.median)],
           ['Potongan Dewan', `-${formatJurusScore(blueJurus.penaltyTotal)}`, `-${formatJurusScore(redJurus.penaltyTotal)}`],
           ['Standar Deviasi', (blueJurus.stdDev / 100).toFixed(3), (redJurus.stdDev / 100).toFixed(3)],

@@ -133,10 +133,21 @@ service cloud.firestore {
     function isValidJurusCornerData(cd) {
       return cd is map
         && cd.keys().hasAll(['judge1', 'judge2', 'judge3', 'penalties', 'recordedElapsedMs', 'completed'])
-        && cd.keys().hasOnly(['judge1', 'judge2', 'judge3', 'penalties', 'recordedElapsedMs', 'completed'])
+        && cd.keys().hasOnly([
+          'judge1', 'judge2', 'judge3', 'judge4', 'judge5',
+          'judge6', 'judge7', 'judge8', 'judge9', 'judge10',
+          'penalties', 'recordedElapsedMs', 'completed'
+        ])
         && isValidJurusJudgeCornerScore(cd.judge1)
         && isValidJurusJudgeCornerScore(cd.judge2)
         && isValidJurusJudgeCornerScore(cd.judge3)
+        && (!('judge4' in cd) || isValidJurusJudgeCornerScore(cd.judge4))
+        && (!('judge5' in cd) || isValidJurusJudgeCornerScore(cd.judge5))
+        && (!('judge6' in cd) || isValidJurusJudgeCornerScore(cd.judge6))
+        && (!('judge7' in cd) || isValidJurusJudgeCornerScore(cd.judge7))
+        && (!('judge8' in cd) || isValidJurusJudgeCornerScore(cd.judge8))
+        && (!('judge9' in cd) || isValidJurusJudgeCornerScore(cd.judge9))
+        && (!('judge10' in cd) || isValidJurusJudgeCornerScore(cd.judge10))
         && isValidJurusPenalties(cd.penalties)
         && cd.recordedElapsedMs is int && cd.recordedElapsedMs >= 0 && cd.recordedElapsedMs <= 600000
         && cd.completed is bool;
@@ -150,7 +161,7 @@ service cloud.firestore {
         && isValidJurusCornerData(js.red);
     }
 
-    function isValidMatch(data) {
+    function isValidMatchKeys(data) {
       return data.keys().hasAll([
           'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage',
           'blueName', 'blueContingent', 'redName', 'redContingent',
@@ -162,16 +173,20 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage',
-          'competitionCategory', 'jurusType', 'activePerformerCorner', 'jurusState',
-          'blueName', 'blueContingent', 'redName', 'redContingent',
+          'competitionCategory', 'jurusType', 'jurusJudgeCount', 'activePerformerCorner', 'jurusState',
+          'blueName', 'blueContingent', 'blueCountry', 'bluePhoto',
+          'redName', 'redContingent', 'redCountry', 'redPhoto',
           'roundDurationSec', 'currentRound', 'totalRounds', 'status', 'timerRemainingMs', 'timerStartedAtMs',
           'blueScore', 'redScore', 'bluePunches', 'blueKicks', 'blueFalls',
           'blueBinaan', 'blueTeguran1', 'blueTeguran2', 'bluePeringatan',
           'redPunches', 'redKicks', 'redFalls', 'redBinaan', 'redTeguran1',
-          'redTeguran2', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote', 'verification',
+          'redTeguran2', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote', 'verification', 'juriLocked',
           'winner', 'winMethod', 'finishedAtMs', 'createdAt', 'updatedAt'
-        ])
-        && isValidId(data.id)
+        ]);
+    }
+
+    function isValidMatchMeta(data) {
+      return isValidId(data.id)
         && isValidId(data.arenaId)
         && isValidUid(data.ownerId)
         && data.matchNumber is string && data.matchNumber.size() >= 1 && data.matchNumber.size() <= 32
@@ -179,13 +194,21 @@ service cloud.firestore {
         && data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 40
         && (!('competitionCategory' in data) || data.competitionCategory in ['Tanding', 'Jurus'])
         && (!('jurusType' in data) || data.jurusType in ['Tunggal Baku', 'Ganda', 'Regu', 'Tunggal Bebas'])
+        && (!('jurusJudgeCount' in data) || (data.jurusJudgeCount is int && data.jurusJudgeCount >= 3 && data.jurusJudgeCount <= 10))
         && (!('activePerformerCorner' in data) || data.activePerformerCorner in ['blue', 'red'])
         && (!('jurusState' in data) || isValidJurusState(data.jurusState))
         && data.blueName is string && data.blueName.size() >= 1 && data.blueName.size() <= 80
         && data.blueContingent is string && data.blueContingent.size() >= 1 && data.blueContingent.size() <= 80
+        && (!('blueCountry' in data) || (data.blueCountry is string && data.blueCountry.size() <= 64))
+        && (!('bluePhoto' in data) || (data.bluePhoto is string && data.bluePhoto.size() <= 250000))
         && data.redName is string && data.redName.size() >= 1 && data.redName.size() <= 80
         && data.redContingent is string && data.redContingent.size() >= 1 && data.redContingent.size() <= 80
-        && data.roundDurationSec is int && data.roundDurationSec >= 30 && data.roundDurationSec <= 300
+        && (!('redCountry' in data) || (data.redCountry is string && data.redCountry.size() <= 64))
+        && (!('redPhoto' in data) || (data.redPhoto is string && data.redPhoto.size() <= 250000));
+    }
+
+    function isValidMatchCounters(data) {
+      return data.roundDurationSec is int && data.roundDurationSec >= 30 && data.roundDurationSec <= 300
         && data.currentRound is int && data.currentRound >= 1 && data.currentRound <= 3
         && (!('totalRounds' in data) || (data.totalRounds is int && data.totalRounds >= 1 && data.totalRounds <= 3))
         && data.status in ['waiting', 'active', 'paused', 'break', 'finished']
@@ -206,16 +229,27 @@ service cloud.firestore {
         && data.redBinaan is int && data.redBinaan >= 0 && data.redBinaan <= 20
         && data.redTeguran1 is int && data.redTeguran1 >= 0 && data.redTeguran1 <= 20
         && data.redTeguran2 is int && data.redTeguran2 >= 0 && data.redTeguran2 <= 20
-        && data.redPeringatan is int && data.redPeringatan >= 0 && data.redPeringatan <= 3
-        && (!('judge1Vote' in data) || isValidJudgeVote(data.judge1Vote))
+        && data.redPeringatan is int && data.redPeringatan >= 0 && data.redPeringatan <= 3;
+    }
+
+    function isValidMatchState(data) {
+      return (!('judge1Vote' in data) || isValidJudgeVote(data.judge1Vote))
         && (!('judge2Vote' in data) || isValidJudgeVote(data.judge2Vote))
         && (!('judge3Vote' in data) || isValidJudgeVote(data.judge3Vote))
         && (!('verification' in data) || isValidVerification(data.verification))
+        && (!('juriLocked' in data) || data.juriLocked is bool)
         && data.winner in ['blue', 'red', 'draw', '']
         && data.winMethod is string && data.winMethod.size() <= 64
         && (!('finishedAtMs' in data) || (data.finishedAtMs is int && data.finishedAtMs >= 0))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidMatch(data) {
+      return isValidMatchKeys(data)
+        && isValidMatchMeta(data)
+        && isValidMatchCounters(data)
+        && isValidMatchState(data);
     }
 
     function isValidMatchEvent(data) {
@@ -248,14 +282,16 @@ service cloud.firestore {
           'ageCategory', 'competitionCategory', 'gelanggang', 'createdAt'
         ])
         && data.keys().hasOnly([
-          'id', 'arenaId', 'ownerId', 'name', 'contingent', 'weightClass', 'gender',
-          'ageCategory', 'competitionCategory', 'gelanggang', 'createdAt'
+          'id', 'arenaId', 'ownerId', 'name', 'contingent', 'country', 'photo',
+          'weightClass', 'gender', 'ageCategory', 'competitionCategory', 'gelanggang', 'createdAt'
         ])
         && isValidId(data.id)
         && isValidId(data.arenaId)
         && isValidUid(data.ownerId)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
         && data.contingent is string && data.contingent.size() >= 1 && data.contingent.size() <= 80
+        && (!('country' in data) || (data.country is string && data.country.size() <= 64))
+        && (!('photo' in data) || (data.photo is string && data.photo.size() <= 250000))
         && data.weightClass is string && data.weightClass.size() >= 1 && data.weightClass.size() <= 80
         && data.gender in ['Putra', 'Putri']
         && data.ageCategory in ['Usia Dini 1', 'Usia Dini 2', 'Usia Dini', 'Pra Remaja', 'Remaja', 'Dewasa', 'Master']
@@ -370,6 +406,17 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && isArenaOwner(arenaId)
           && incoming().ownerId == request.auth.uid;
+        allow update: if isValidId(arenaId) && isValidId(athleteId) && isVerifiedUser()
+          && isValidAthlete(incoming())
+          && incoming().id == existing().id
+          && incoming().arenaId == existing().arenaId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && (isArenaOwner(arenaId) || isAdmin())
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'contingent', 'country', 'photo', 'weightClass',
+            'gender', 'ageCategory', 'competitionCategory', 'gelanggang'
+          ]);
         allow delete: if isValidId(arenaId) && isValidId(athleteId) && isVerifiedUser() && (
           isArenaOwner(arenaId) || isAdmin()
         );
@@ -428,47 +475,21 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && canAccessArena(arenaId)
           && (
             isAdmin() ||
             (
-              existing().status != 'finished' && (
-                incoming().diff(existing()).affectedKeys().hasOnly([
-                  'timerRemainingMs', 'timerStartedAtMs', 'status', 'currentRound',
-                  'activePerformerCorner', 'jurusState', 'blueScore', 'redScore', 'updatedAt'
-                ]) ||
-                incoming().diff(existing()).affectedKeys().hasOnly([
-                  'judge1Vote', 'judge2Vote', 'judge3Vote',
-                  'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks', 'updatedAt'
-                ]) ||
-                incoming().diff(existing()).affectedKeys().hasOnly([
-                  'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
-                  'blueFalls', 'redFalls', 'blueBinaan', 'redBinaan',
-                  'blueTeguran1', 'redTeguran1', 'blueTeguran2', 'redTeguran2',
-                  'bluePeringatan', 'redPeringatan', 'status', 'winner', 'winMethod', 'finishedAtMs',
-                  'activePerformerCorner', 'jurusState', 'updatedAt'
-                ]) ||
-                incoming().diff(existing()).affectedKeys().hasOnly([
-                  'matchNumber', 'weightClass', 'stage', 'competitionCategory', 'jurusType',
-                  'activePerformerCorner', 'jurusState', 'blueName', 'blueContingent',
-                  'redName', 'redContingent', 'roundDurationSec', 'currentRound', 'totalRounds', 'status',
-                  'timerRemainingMs', 'timerStartedAtMs', 'updatedAt'
-                ]) ||
-                incoming().diff(existing()).affectedKeys().hasOnly([
-                  'verification', 'updatedAt'
-                ])
-              )
-            ) ||
-            (
-              isArenaOwner(arenaId) &&
+              (isArenaOwner(arenaId) || (existing().status != 'finished' && isArenaOperator(arenaId))) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
-                'status', 'winner', 'winMethod', 'finishedAtMs', 'currentRound', 'totalRounds',
-                'timerRemainingMs', 'timerStartedAtMs', 'competitionCategory', 'jurusType',
-                'activePerformerCorner', 'jurusState', 'blueScore', 'redScore',
-                'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
+                'matchNumber', 'weightClass', 'stage', 'competitionCategory', 'jurusType', 'jurusJudgeCount',
+                'activePerformerCorner', 'jurusState', 'blueName', 'blueContingent', 'blueCountry', 'bluePhoto',
+                'redName', 'redContingent', 'redCountry', 'redPhoto',
+                'roundDurationSec', 'currentRound', 'totalRounds', 'status',
+                'timerRemainingMs', 'timerStartedAtMs', 'juriLocked',
+                'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
                 'blueFalls', 'redFalls', 'blueBinaan', 'redBinaan',
                 'blueTeguran1', 'redTeguran1', 'blueTeguran2', 'redTeguran2',
-                'bluePeringatan', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote', 'verification', 'updatedAt'
+                'bluePeringatan', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote',
+                'verification', 'winner', 'winMethod', 'finishedAtMs', 'updatedAt'
               ])
             )
           );
