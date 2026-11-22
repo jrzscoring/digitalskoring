@@ -15,6 +15,7 @@ import {
   getJurusJudgeIds,
   getRemainingTimerMs,
   isJurusMatch,
+  validateJurusJudgeCountInput,
 } from './ipsiRules';
 import type { MatchData } from '../types/silat';
 
@@ -330,6 +331,22 @@ test('Jurus TGRS dynamic judge count supports 4..10 judges with default 3 fallba
   const decision = determineOfficialWinner(match7);
   assert.equal(decision.winner, 'blue');
 });
+
+test('validateJurusJudgeCountInput validates strict integers 4..10 and rejects invalid inputs', () => {
+  for (let n = 4; n <= 10; n += 1) {
+    assert.deepEqual(validateJurusJudgeCountInput(String(n)), { valid: true, value: n });
+  }
+  assert.deepEqual(validateJurusJudgeCountInput(' 6 '), { valid: true, value: 6 });
+
+  assert.equal(validateJurusJudgeCountInput('').valid, false);
+  assert.equal(validateJurusJudgeCountInput('3').valid, false);
+  assert.equal(validateJurusJudgeCountInput('11').valid, false);
+  assert.equal(validateJurusJudgeCountInput('-5').valid, false);
+  assert.equal(validateJurusJudgeCountInput('4.5').valid, false);
+  assert.equal(validateJurusJudgeCountInput('6,0').valid, false);
+  assert.equal(validateJurusJudgeCountInput('abc').valid, false);
+});
+
 
 
 

@@ -31,11 +31,41 @@ export interface OfflineBackupRecord {
   pendingFirestoreOps: PendingFirestoreOp[];
 }
 
+export interface QueuedSyncEntry {
+  id: string;
+  arenaId: string;
+  backend: 'rtdb' | 'firestore';
+  kind: 'score_update' | 'match_op';
+  summary?: string;
+  firestoreOp?: PendingFirestoreOp;
+  rtdbPath?: string;
+  rtdbPayload?: unknown;
+  createdAtMs: number;
+  attempts: number;
+  lastError?: string;
+}
+
 const BACKUP_KEY_PREFIX = 'silat_offline_backup_v1_';
 const SYNC_LOCK_KEY_PREFIX = 'silat_offline_sync_lock_v1_';
 const SYNC_LOCK_TTL_MS = 10000;
 const IDB_NAME = 'silat_offline_cache_v1';
+const IDB_VERSION = 2;
 const IDB_STORE = 'arena_backups';
+const IDB_QUEUE_STORE = 'sync_queue';
+
+let queueSeqCounter = 0;
+let lastQueueTimestampMs = 0;
+
+function nextQueueIdentity(): { id: string; createdAtMs: number } {
+  const now = Date.now();
+  const createdAtMs = Math.max(now, lastQueueTimestampMs + 1);
+  lastQueueTimestampMs = createdAtMs;
+  queueSeqCounter += 1;
+  const id = `idbq-${createdAtMs}-${String(queueSeqCounter).padStart(4, '0')}-${Math.random()
+    .toString(36)
+    .slice(2, 6)}`;
+  return { id, createdAtMs };
+}
 
 export function getBackupStorageKey(arenaId: string): string {
   const safeId = arenaId.replace(/[^a-zA-Z0-9_-]/g, '-') || 'gelanggang-a';
@@ -118,17 +148,32 @@ export function safeWriteLocalPayload(storageKey: string, payload: LocalStorePay
   }
 }
 
-function openOfflineIdb(): Promise<IDBDatabase | null> {
-  if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
+export function isIndexedDbAvailable(
+  factory: IDBFactory | undefined = typeof indexedDB !== 'undefined' ? indexedDB : undefined
+): boolean {
+  return Boolean(factory && typeof factory.open === 'function');
+}
+
+function openOfflineIdb(
+  factory: IDBFactory | undefined = typeof indexedDB !== 'undefined' ? indexedDB : undefined
+): Promise<IDBDatabase | null> {
+  if (!factory || typeof factory.open !== 'function') {
     return Promise.resolve(null);
   }
   return new Promise((resolve) => {
     try {
-      const req = indexedDB.open(IDB_NAME, 1);
+      const req = factory.open(IDB_NAME, IDB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(IDB_STORE)) {
           db.createObjectStore(IDB_STORE);
+        }
+        if (!db.objectStoreNames.contains(IDB_QUEUE_STORE)) {
+          const queueStore = db.createObjectStore(IDB_QUEUE_STORE, { keyPath: 'id' });
+          queueStore.createIndex('by_arena', 'arenaId', { unique: false });
+          queueStore.createIndex('by_arena_created', ['arenaId', 'createdAtMs'], {
+            unique: false,
+          });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -139,8 +184,12 @@ function openOfflineIdb(): Promise<IDBDatabase | null> {
   });
 }
 
-export async function mirrorRecordToIndexedDb(key: string, value: unknown): Promise<void> {
-  const db = await openOfflineIdb();
+export async function mirrorRecordToIndexedDb(
+  key: string,
+  value: unknown,
+  factory?: IDBFactory
+): Promise<void> {
+  const db = await openOfflineIdb(factory);
   if (!db) return;
   try {
     await new Promise<void>((resolve) => {
@@ -156,8 +205,11 @@ export async function mirrorRecordToIndexedDb(key: string, value: unknown): Prom
   }
 }
 
-export async function readRecordFromIndexedDb<T>(key: string): Promise<T | null> {
-  const db = await openOfflineIdb();
+export async function readRecordFromIndexedDb<T>(
+  key: string,
+  factory?: IDBFactory
+): Promise<T | null> {
+  const db = await openOfflineIdb(factory);
   if (!db) return null;
   try {
     return await new Promise<T | null>((resolve) => {
@@ -173,7 +225,188 @@ export async function readRecordFromIndexedDb<T>(key: string): Promise<T | null>
   }
 }
 
-export async function clearAllOfflineStorage(localStorageKey: string): Promise<void> {
+export type NewQueuedSyncEntry = Omit<QueuedSyncEntry, 'id' | 'createdAtMs' | 'attempts'>;
+
+export async function getIndexedDbSyncQueue(
+  arenaId: string,
+  backend?: 'rtdb' | 'firestore',
+  factory?: IDBFactory
+): Promise<QueuedSyncEntry[]> {
+  if (!arenaId) return [];
+  const db = await openOfflineIdb(factory);
+  if (!db) return [];
+  try {
+    return await new Promise<QueuedSyncEntry[]>((resolve) => {
+      const tx = db.transaction(IDB_QUEUE_STORE, 'readonly');
+      const store = tx.objectStore(IDB_QUEUE_STORE);
+      const req = store.indexNames.contains('by_arena')
+        ? store.index('by_arena').getAll(arenaId)
+        : store.getAll();
+      req.onsuccess = () => {
+        const rawList = Array.isArray(req.result) ? (req.result as QueuedSyncEntry[]) : [];
+        const filtered = rawList.filter(
+          (entry) =>
+            entry &&
+            entry.arenaId === arenaId &&
+            (!backend || entry.backend === backend)
+        );
+        filtered.sort((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
+        resolve(filtered);
+      };
+      req.onerror = () => resolve([]);
+    });
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
+export async function getIndexedDbSyncQueueCount(
+  arenaId: string,
+  backend?: 'rtdb' | 'firestore',
+  factory?: IDBFactory
+): Promise<number> {
+  const entries = await getIndexedDbSyncQueue(arenaId, backend, factory);
+  return entries.length;
+}
+
+export async function enqueueIndexedDbSyncBatch(
+  items: NewQueuedSyncEntry[],
+  factory?: IDBFactory
+): Promise<QueuedSyncEntry[]> {
+  if (items.length === 0) return [];
+  const entries: QueuedSyncEntry[] = items.map((item) => {
+    const { id, createdAtMs } = nextQueueIdentity();
+    return {
+      ...item,
+      id,
+      createdAtMs,
+      attempts: 0,
+    };
+  });
+
+  const db = await openOfflineIdb(factory);
+  if (!db) return entries;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_QUEUE_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_QUEUE_STORE);
+      for (const entry of entries) {
+        store.put(entry);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore IDB write error
+  } finally {
+    db.close();
+  }
+  return entries;
+}
+
+export async function enqueueIndexedDbSyncItem(
+  item: NewQueuedSyncEntry,
+  factory?: IDBFactory
+): Promise<QueuedSyncEntry> {
+  const [inserted] = await enqueueIndexedDbSyncBatch([item], factory);
+  return inserted;
+}
+
+export async function removeIndexedDbSyncItems(
+  ids: string[],
+  factory?: IDBFactory
+): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await openOfflineIdb(factory);
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_QUEUE_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_QUEUE_STORE);
+      for (const id of ids) {
+        store.delete(id);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore IDB delete error
+  } finally {
+    db.close();
+  }
+}
+
+export async function markIndexedDbSyncItemAttempt(
+  id: string,
+  errorMessage?: string,
+  factory?: IDBFactory
+): Promise<void> {
+  if (!id) return;
+  const db = await openOfflineIdb(factory);
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_QUEUE_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_QUEUE_STORE);
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result as QueuedSyncEntry | undefined;
+        if (existing) {
+          store.put({
+            ...existing,
+            attempts: (existing.attempts || 0) + 1,
+            ...(errorMessage ? { lastError: errorMessage } : {}),
+          });
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore IDB error
+  } finally {
+    db.close();
+  }
+}
+
+export async function clearIndexedDbSyncQueue(
+  arenaId?: string,
+  backend?: 'rtdb' | 'firestore',
+  factory?: IDBFactory
+): Promise<void> {
+  const db = await openOfflineIdb(factory);
+  if (!db) return;
+  try {
+    if (!arenaId && !backend) {
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction(IDB_QUEUE_STORE, 'readwrite');
+        tx.objectStore(IDB_QUEUE_STORE).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+      return;
+    }
+
+    const targets = arenaId ? await getIndexedDbSyncQueue(arenaId, backend, factory) : [];
+    if (targets.length > 0) {
+      await removeIndexedDbSyncItems(
+        targets.map((t) => t.id),
+        factory
+      );
+    }
+  } catch {
+    // ignore IDB errors
+  } finally {
+    db.close();
+  }
+}
+
+export async function clearAllOfflineStorage(
+  localStorageKey: string,
+  factory?: IDBFactory
+): Promise<void> {
   if (typeof window !== 'undefined') {
     try {
       const keysToRemove: string[] = [];
@@ -196,12 +429,19 @@ export async function clearAllOfflineStorage(localStorageKey: string): Promise<v
     }
   }
 
-  const db = await openOfflineIdb();
+  const db = await openOfflineIdb(factory);
   if (!db) return;
   try {
+    const storeNames: string[] = [];
+    if (db.objectStoreNames.contains(IDB_STORE)) storeNames.push(IDB_STORE);
+    if (db.objectStoreNames.contains(IDB_QUEUE_STORE)) storeNames.push(IDB_QUEUE_STORE);
+    if (storeNames.length === 0) return;
+
     await new Promise<void>((resolve) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).clear();
+      const tx = db.transaction(storeNames, 'readwrite');
+      for (const name of storeNames) {
+        tx.objectStore(name).clear();
+      }
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });

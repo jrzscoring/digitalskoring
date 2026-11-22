@@ -2,16 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   acquireOfflineSyncLock,
+  clearIndexedDbSyncQueue,
   clearPendingFirestoreOps,
   enqueueFirestoreOp,
+  enqueueIndexedDbSyncBatch,
+  enqueueIndexedDbSyncItem,
   getBackupStorageKey,
+  getIndexedDbSyncQueue,
+  getIndexedDbSyncQueueCount,
   getPendingFirestoreOps,
   isOfflineNetworkError,
   isPermissionDeniedError,
   isRtdbBackupDirty,
+  markIndexedDbSyncItemAttempt,
   markRtdbBackupSynced,
   readOfflineBackup,
   releaseOfflineSyncLock,
+  removeIndexedDbSyncItems,
   removePendingFirestoreOps,
   saveFirestoreSnapshotBackup,
   saveRtdbLocalBackup,
@@ -210,3 +217,184 @@ test('Offline/network vs permission error classifiers', () => {
   assert.equal(isOfflineNetworkError({ code: 'permission-denied', message: 'Missing permissions' }), false);
   assert.equal(isPermissionDeniedError({ code: 'permission-denied', message: 'Missing permissions' }), true);
 });
+
+function createMockIdbFactory(): IDBFactory {
+  const databases = new Map<
+    string,
+    { version: number; stores: Map<string, { keyPath?: string; indexes: Set<string>; records: Map<unknown, unknown> }> }
+  >();
+
+  return {
+    open(name: string, version = 1) {
+      let dbRecord = databases.get(name);
+      const isUpgrade = !dbRecord || dbRecord.version < version;
+      if (!dbRecord) {
+        dbRecord = { version, stores: new Map() };
+        databases.set(name, dbRecord);
+      } else if (isUpgrade) {
+        dbRecord.version = version;
+      }
+
+      const dbObj: Record<string, unknown> = {
+        objectStoreNames: {
+          contains: (storeName: string) => dbRecord!.stores.has(storeName),
+        },
+        createObjectStore: (storeName: string, opts?: { keyPath?: string }) => {
+          const storeData = {
+            keyPath: opts?.keyPath,
+            indexes: new Set<string>(),
+            records: new Map<unknown, unknown>(),
+          };
+          dbRecord!.stores.set(storeName, storeData);
+          return {
+            createIndex: (idxName: string) => {
+              storeData.indexes.add(idxName);
+            },
+          };
+        },
+        close: () => {},
+        transaction: () => {
+          const tx: Record<string, unknown> = {
+            oncomplete: null as (() => void) | null,
+            onerror: null as (() => void) | null,
+            objectStore: (storeName: string) => {
+              const storeData = dbRecord!.stores.get(storeName)!;
+              const finishTx = () => queueMicrotask(() => (tx.oncomplete as (() => void) | null)?.());
+              return {
+                indexNames: { contains: (idx: string) => storeData.indexes.has(idx) },
+                index: () => ({
+                  getAll: (filterVal: unknown) => {
+                    const idxReq: Record<string, unknown> = { result: null, onsuccess: null, onerror: null };
+                    queueMicrotask(() => {
+                      const list = Array.from(storeData.records.values()).filter(
+                        (r) => (r as Record<string, unknown>).arenaId === filterVal
+                      );
+                      idxReq.result = list;
+                      (idxReq.onsuccess as (() => void) | null)?.();
+                    });
+                    return idxReq;
+                  },
+                }),
+                getAll: () => {
+                  const req: Record<string, unknown> = { result: null, onsuccess: null, onerror: null };
+                  queueMicrotask(() => {
+                    req.result = Array.from(storeData.records.values());
+                    (req.onsuccess as (() => void) | null)?.();
+                  });
+                  return req;
+                },
+                get: (key: unknown) => {
+                  const req: Record<string, unknown> = { result: null, onsuccess: null, onerror: null };
+                  queueMicrotask(() => {
+                    req.result = storeData.records.get(key);
+                    (req.onsuccess as (() => void) | null)?.();
+                  });
+                  return req;
+                },
+                put: (val: unknown, explicitKey?: unknown) => {
+                  const key = storeData.keyPath
+                    ? (val as Record<string, unknown>)[storeData.keyPath]
+                    : explicitKey;
+                  storeData.records.set(key, JSON.parse(JSON.stringify(val)));
+                  finishTx();
+                },
+                delete: (key: unknown) => {
+                  storeData.records.delete(key);
+                  finishTx();
+                },
+                clear: () => {
+                  storeData.records.clear();
+                  finishTx();
+                },
+              };
+            },
+          };
+          return tx;
+        },
+      };
+
+      const openReq: Record<string, unknown> = {
+        result: dbObj,
+        onupgradeneeded: null as (() => void) | null,
+        onsuccess: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+      };
+
+      queueMicrotask(() => {
+        if (isUpgrade) {
+          (openReq.onupgradeneeded as (() => void) | null)?.();
+        }
+        (openReq.onsuccess as (() => void) | null)?.();
+      });
+
+      return openReq as unknown as IDBOpenDBRequest;
+    },
+  } as unknown as IDBFactory;
+}
+
+test('IndexedDB sync_queue persists offline score updates in order and drains cleanly after sync', async () => {
+  const idb = createMockIdbFactory();
+  const arenaId = 'gelanggang-a';
+
+  await enqueueIndexedDbSyncItem(
+    {
+      arenaId,
+      backend: 'rtdb',
+      kind: 'score_update',
+      rtdbPath: `silat_arenas/${arenaId}`,
+      rtdbPayload: makeSamplePayload(1),
+    },
+    idb
+  );
+  await enqueueIndexedDbSyncItem(
+    {
+      arenaId,
+      backend: 'rtdb',
+      kind: 'score_update',
+      rtdbPath: `silat_arenas/${arenaId}`,
+      rtdbPayload: makeSamplePayload(3),
+    },
+    idb
+  );
+  await enqueueIndexedDbSyncBatch(
+    [
+      {
+        arenaId,
+        backend: 'firestore',
+        kind: 'score_update',
+        firestoreOp: {
+          id: 'fop-1',
+          opType: 'update',
+          pathSegments: ['arenas', arenaId, 'matches', 'partai-01'],
+          data: { blueScore: 3 },
+          timestampMode: 'update',
+          createdAtMs: Date.now(),
+        },
+      },
+    ],
+    idb
+  );
+
+  const rtdbQueue = await getIndexedDbSyncQueue(arenaId, 'rtdb', idb);
+  assert.equal(rtdbQueue.length, 2);
+  assert.equal((rtdbQueue[0].rtdbPayload as LocalStorePayload).matches[0].blueScore, 1);
+  assert.equal((rtdbQueue[1].rtdbPayload as LocalStorePayload).matches[0].blueScore, 3);
+  assert.equal(await getIndexedDbSyncQueueCount(arenaId, 'rtdb', idb), 2);
+  assert.equal(await getIndexedDbSyncQueueCount(arenaId, 'firestore', idb), 1);
+
+  await markIndexedDbSyncItemAttempt(rtdbQueue[0].id, 'Network timeout', idb);
+  const afterAttempt = await getIndexedDbSyncQueue(arenaId, 'rtdb', idb);
+  assert.equal(afterAttempt[0].attempts, 1);
+  assert.equal(afterAttempt[0].lastError, 'Network timeout');
+
+  await removeIndexedDbSyncItems(
+    rtdbQueue.map((e) => e.id),
+    idb
+  );
+  assert.equal(await getIndexedDbSyncQueueCount(arenaId, 'rtdb', idb), 0);
+  assert.equal(await getIndexedDbSyncQueueCount(arenaId, 'firestore', idb), 1);
+
+  await clearIndexedDbSyncQueue(arenaId, 'firestore', idb);
+  assert.equal(await getIndexedDbSyncQueueCount(arenaId, undefined, idb), 0);
+});
+

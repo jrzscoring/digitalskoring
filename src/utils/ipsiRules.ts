@@ -396,6 +396,7 @@ export function createEmptyJurusJudgeScore(): JurusJudgeCornerScore {
     attackScore: 0,
     harmonyScore: 0,
     soulScore: 0,
+    ready: false,
     submitted: false,
   };
 }
@@ -426,6 +427,36 @@ export function createInitialJurusState(): JurusMatchState {
     blue: createEmptyJurusCornerData(),
     red: createEmptyJurusCornerData(),
   };
+}
+
+export interface JurusJudgeCountValidationResult {
+  valid: boolean;
+  value?: number;
+  error?: string;
+}
+
+export function validateJurusJudgeCountInput(raw: string): JurusJudgeCountValidationResult {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      error: 'Jumlah juri tidak boleh kosong. Masukkan angka bulat antara 4 sampai 10.',
+    };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return {
+      valid: false,
+      error: 'Input tidak valid. Jumlah juri harus berupa angka bulat antara 4 sampai 10 (tanpa desimal atau huruf).',
+    };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 4 || parsed > 10) {
+    return {
+      valid: false,
+      error: `Jumlah juri (${trimmed}) di luar rentang. Masukkan angka bulat antara 4 sampai 10.`,
+    };
+  }
+  return { valid: true, value: parsed };
 }
 
 export function normalizeJurusJudgeCount(raw?: number | null): number {

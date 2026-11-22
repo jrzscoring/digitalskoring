@@ -11,6 +11,7 @@ import teguran2Icon from '@/teguran2.png';
 import pukulanWhite from '../assets/pukulan-white.png';
 import tendanganWhite from '../assets/tendangan-white.png';
 import { useArena } from '../context/ArenaContext';
+import { useFullscreenState } from '../hooks/useAutoFullscreen';
 import type { AppView, Corner, JudgeId, MatchData } from '../types/silat';
 import { getDefaultAthletePhoto, resolveAthletePhoto } from '../utils/athletePhotos';
 import { CountryFlag, resolveCountryInfo } from '../utils/countries';
@@ -71,6 +72,7 @@ function AthletePortrait({
   alt,
   className = 'w-24 h-32 sm:w-32 sm:h-44 xl:w-36 xl:h-48',
   trailing = false,
+  mutedGray = false,
 }: {
   photo?: string;
   corner: Corner;
@@ -78,6 +80,7 @@ function AthletePortrait({
   alt: string;
   className?: string;
   trailing?: boolean;
+  mutedGray?: boolean;
 }) {
   const resolved = resolveAthletePhoto(photo, corner, weightClass);
   const [src, setSrc] = useState(resolved.src);
@@ -87,7 +90,9 @@ function AthletePortrait({
   }, [resolved.src]);
 
   const fallback = getDefaultAthletePhoto(corner, weightClass);
-  const frameBorder = trailing
+  const frameBorder = mutedGray
+    ? 'border-zinc-400/60'
+    : trailing
     ? 'border-slate-400/50'
     : corner === 'blue'
     ? 'border-sky-300/75 shadow-[0_12px_32px_rgba(37,99,235,0.45)]'
@@ -104,12 +109,16 @@ function AthletePortrait({
         onError={() => {
           if (src !== fallback) setSrc(fallback);
         }}
-        className="w-full h-full object-cover object-top"
+        className={`w-full h-full object-cover object-top transition-all duration-300 ${
+          mutedGray ? 'grayscale opacity-75' : ''
+        }`}
       />
       <div
         aria-hidden="true"
         className={`pointer-events-none absolute inset-0 ${
-          corner === 'blue'
+          mutedGray
+            ? 'bg-gradient-to-t from-zinc-950/85 via-transparent to-zinc-400/10'
+            : corner === 'blue'
             ? 'bg-gradient-to-t from-blue-950/75 via-transparent to-sky-400/10'
             : 'bg-gradient-to-t from-red-950/75 via-transparent to-rose-400/10'
         }`}
@@ -117,7 +126,7 @@ function AthletePortrait({
       <div
         aria-hidden="true"
         className={`pointer-events-none absolute bottom-0 inset-x-0 h-1 ${
-          corner === 'blue' ? 'bg-sky-400' : 'bg-rose-400'
+          mutedGray ? 'bg-zinc-400/75' : corner === 'blue' ? 'bg-sky-400' : 'bg-rose-400'
         }`}
       />
     </div>
@@ -158,7 +167,7 @@ function SanctionTrack({
 
 export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
   const { arena, matches, athletes, activeMatch, liveTimerMs } = useArena();
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const { isFullscreen } = useFullscreenState();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
   const findMatchedAthlete = useMemo(() => {
@@ -189,13 +198,6 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
     [matches, activeMatch]
   );
 
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
 
   useEffect(() => {
     if (!isJurus || activeMatch.status !== 'active') return;
@@ -230,6 +232,7 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
   });
 
   const activePerformer: Corner = activeMatch.activePerformerCorner || 'blue';
+  const isJurusFinished = isJurus && activeMatch.status === 'finished' && Boolean(activeMatch.winner);
   const jurusJudgeCount = getJurusJudgeCount(activeMatch);
   const jurusJudgeIds = useMemo(() => getJurusJudgeIds(jurusJudgeCount), [jurusJudgeCount]);
   const blueSummary = computeCornerJurusSummary(jurusType, jurusState.blue, jurusJudgeCount);
@@ -243,7 +246,6 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
   const redElapsedMs =
     jurusState.red.recordedElapsedMs + (activePerformer === 'red' ? runningSegMs : 0);
   const activeElapsedMs = activePerformer === 'blue' ? blueElapsedMs : redElapsedMs;
-  const activeCornerData = jurusState[activePerformer];
   const activeCornerSummary = activePerformer === 'blue' ? blueSummary : redSummary;
 
   const displayedBlueScore = isJurus ? blueSummary.finalScore : activeMatch.blueScore;
@@ -377,229 +379,503 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
         />
 
         {isJurus ? (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 items-stretch gap-3 sm:gap-4">
-            {/* Sudut Biru Jurus International Broadcast Card */}
-            <section
-              className={`lg:col-span-5 rounded-3xl ${blueSectionBg} border-2 p-4 sm:p-6 flex flex-col justify-between shadow-2xl transition-all duration-300 ease-out origin-center relative overflow-hidden ${
-                bluePulse
-                  ? 'scale-[1.02] border-yellow-300 ring-4 ring-yellow-300/80 shadow-[0_0_45px_rgba(250,204,21,0.45)] z-10'
-                  : activePerformer === 'blue'
-                  ? 'scale-100 border-yellow-300 ring-2 ring-yellow-300/45'
-                  : blueTrailing
-                  ? 'scale-100 border-slate-500/60'
-                  : 'scale-100 border-sky-300/65'
-              }`}
+          isJurusFinished ? (
+            /* FINAL DUAL-CORNER JURUS RESULT DISPLAY (After Dewan Announces Winner) */
+            <div
+              data-testid="scoreboard-jurus-final-dual"
+              className="flex-1 grid grid-cols-1 lg:grid-cols-12 items-stretch gap-3 sm:gap-4"
             >
-              {/* Athlete Identity with Portrait + Flag + Name */}
-              <div className="flex items-center gap-4 mb-2">
-                <AthletePortrait
-                  photo={resolvedBluePhoto}
-                  corner="blue"
-                  weightClass={activeMatch.weightClass}
-                  alt={activeMatch.blueName}
-                  trailing={blueTrailing}
-                  className="w-24 h-32 sm:w-28 sm:h-36"
-                />
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 pb-1 border-b border-white/15">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <CountryFlag code={blueCountry.code} name={blueCountry.name} className="w-9 h-6" />
-                      <span className="font-mono text-sm sm:text-base font-black tracking-wider text-yellow-300">
-                        {blueCountry.code}
-                      </span>
-                      <span className="text-xs sm:text-sm font-semibold uppercase tracking-wide text-sky-100/90 truncate">
-                        {blueCountry.name}
-                      </span>
-                    </div>
-                    {activePerformer === 'blue' && (
-                      <span className="px-2 py-0.5 rounded bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wider shrink-0">
-                        Sedang Tampil
-                      </span>
-                    )}
-                  </div>
-                  <h2 className="font-display text-3xl sm:text-4xl xl:text-5xl font-black tracking-tight uppercase text-white leading-[1.03] line-clamp-2">
-                    {activeMatch.blueName}
-                  </h2>
-                  <div className="text-xs sm:text-sm font-semibold text-sky-100/80 truncate">
-                    {activeMatch.blueContingent}
-                  </div>
-                </div>
-              </div>
+              {(() => {
+                const winner = activeMatch.winner;
+                const isBlueLoser = winner === 'red';
+                const isRedLoser = winner === 'blue';
+                const isBlueWinner = winner === 'blue';
+                const isRedWinner = winner === 'red';
 
-              {/* Score */}
-              <div className="my-1 sm:my-2 flex-1 flex items-center justify-center">
-                <div
-                  data-testid="scoreboard-jurus-blue-score"
-                  className={`font-mono text-[5.5rem] sm:text-[7.5rem] lg:text-[9rem] xl:text-[10.5rem] 2xl:text-[12rem] leading-[0.88] tracking-tighter font-black tabular-nums transition-all duration-300 ease-out ${
-                    bluePulse
-                      ? 'scale-110 text-yellow-200 drop-shadow-[0_0_28px_rgba(250,204,21,0.75)]'
-                      : 'scale-100 text-white drop-shadow-[0_8px_24px_rgba(0,0,0,0.5)]'
-                  }`}
-                >
-                  {formatJurusScore(blueSummary.finalScore)}
-                </div>
-              </div>
+                const finalBlueSectionBg = isBlueLoser
+                  ? 'bg-gradient-to-br from-zinc-700 via-zinc-800 to-zinc-900 border-zinc-400/60'
+                  : 'bg-gradient-to-br from-[#0d47a1] via-[#103888] to-[#081b4b]';
+                const finalBlueStatsBg = isBlueLoser
+                  ? 'bg-zinc-950/65 border-zinc-500/40'
+                  : 'bg-[#040d26]/70 border-sky-300/30';
 
-              <div className={`grid grid-cols-4 gap-2 text-center ${blueStatsBg} rounded-2xl p-3 border transition-colors duration-300`}>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-sky-100/80 font-semibold">Median</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-yellow-300">
-                    {formatJurusScore(blueSummary.median)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-sky-100/80 font-semibold">Potongan</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-rose-300">
-                    -{formatJurusScore(blueSummary.penaltyTotal)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-sky-100/80 font-semibold">Waktu</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-white">
-                    {formatJurusElapsedMs(blueElapsedMs)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-sky-100/80 font-semibold">Std. Dev</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-sky-100">
-                    {(blueSummary.stdDev / 100).toFixed(3)}
-                  </div>
-                </div>
-              </div>
-            </section>
+                const finalRedSectionBg = isRedLoser
+                  ? 'bg-gradient-to-bl from-zinc-700 via-zinc-800 to-zinc-900 border-zinc-400/60'
+                  : 'bg-gradient-to-bl from-[#b91c1c] via-[#991b1b] to-[#450a0a]';
+                const finalRedStatsBg = isRedLoser
+                  ? 'bg-zinc-950/65 border-zinc-500/40'
+                  : 'bg-[#260508]/70 border-rose-300/30';
 
-            {/* Center Panel: Kategori Jurus & Dual Clocks */}
-            <section className="lg:col-span-2 rounded-3xl bg-gradient-to-b from-[#130a29]/95 via-[#0b0618]/95 to-black/95 border border-purple-600/55 p-4 flex flex-col items-center justify-between gap-3 text-center shadow-2xl">
-              <div className="w-full pb-2.5 border-b border-white/10 space-y-0.5">
-                <div className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-sky-300">
-                  Jurus TGRS
-                </div>
-                <div className="font-display text-xl sm:text-2xl font-black uppercase text-yellow-300">
-                  {jurusType}
-                </div>
-              </div>
+                return (
+                  <>
+                    {/* Sudut Biru Final Card */}
+                    <section
+                      data-testid="scoreboard-jurus-blue-corner"
+                      data-corner-tone={isBlueLoser ? 'gray' : 'blue'}
+                      className={`lg:col-span-5 rounded-3xl ${finalBlueSectionBg} border-2 p-4 sm:p-6 flex flex-col justify-between shadow-2xl transition-all duration-300 relative overflow-hidden ${
+                        isBlueWinner
+                          ? 'border-yellow-300 ring-2 ring-yellow-300/60'
+                          : isBlueLoser
+                          ? 'border-zinc-400/60'
+                          : 'border-sky-300/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4 mb-2">
+                        <AthletePortrait
+                          photo={resolvedBluePhoto}
+                          corner="blue"
+                          weightClass={activeMatch.weightClass}
+                          alt={activeMatch.blueName}
+                          mutedGray={isBlueLoser}
+                          className="w-24 h-32 sm:w-28 sm:h-36"
+                        />
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2 pb-1 border-b border-white/15">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <CountryFlag code={blueCountry.code} name={blueCountry.name} className="w-9 h-6" />
+                              <span
+                                className={`font-mono text-sm sm:text-base font-black tracking-wider ${
+                                  isBlueLoser ? 'text-zinc-300' : 'text-yellow-300'
+                                }`}
+                              >
+                                {blueCountry.code}
+                              </span>
+                              <span
+                                className={`text-xs sm:text-sm font-semibold uppercase tracking-wide truncate ${
+                                  isBlueLoser ? 'text-zinc-300' : 'text-sky-100/90'
+                                }`}
+                              >
+                                {blueCountry.name}
+                              </span>
+                            </div>
+                            {isBlueWinner ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wider shrink-0">
+                                <Trophy className="w-3 h-3" />
+                                Pemenang
+                              </span>
+                            ) : isBlueLoser ? (
+                              <span className="px-2 py-0.5 rounded bg-zinc-600/80 text-zinc-200 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                                Sudut Biru
+                              </span>
+                            ) : null}
+                          </div>
+                          <h2
+                            className={`font-display text-3xl sm:text-4xl xl:text-5xl font-black tracking-tight uppercase leading-[1.03] line-clamp-2 ${
+                              isBlueLoser ? 'text-zinc-200' : 'text-white'
+                            }`}
+                          >
+                            {activeMatch.blueName}
+                          </h2>
+                          <div
+                            className={`text-xs sm:text-sm font-semibold truncate ${
+                              isBlueLoser ? 'text-zinc-300' : 'text-sky-100/80'
+                            }`}
+                          >
+                            {activeMatch.blueContingent}
+                          </div>
+                        </div>
+                      </div>
 
-              <div className="w-full rounded-2xl bg-black/65 border border-purple-500/45 p-3 space-y-1">
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">
-                  Waktu Tampil Arena
-                </div>
-                <div
-                  data-testid="scoreboard-timer"
-                  className={`font-mono text-4xl sm:text-5xl font-black tabular-nums tracking-tight ${
-                    liveTimerMs <= 10000 && activeMatch.status === 'active'
-                      ? 'text-yellow-300'
-                      : 'text-white'
-                  }`}
-                >
-                  {formatMatchTime(liveTimerMs)}
-                </div>
-                <div className="text-[11px] font-bold uppercase tracking-widest text-sky-300">{statusText}</div>
-              </div>
+                      <div className="my-1 sm:my-2 flex-1 flex items-center justify-center">
+                        <div
+                          data-testid="scoreboard-jurus-blue-score"
+                          className={`font-mono text-[5.5rem] sm:text-[7.5rem] lg:text-[9rem] xl:text-[10.5rem] 2xl:text-[12rem] leading-[0.88] tracking-tighter font-black tabular-nums ${
+                            isBlueLoser
+                              ? 'text-zinc-200 drop-shadow-[0_6px_18px_rgba(0,0,0,0.45)]'
+                              : 'text-white drop-shadow-[0_8px_24px_rgba(0,0,0,0.5)]'
+                          }`}
+                        >
+                          {formatJurusScore(blueSummary.finalScore)}
+                        </div>
+                      </div>
 
-              <div className="w-full rounded-2xl bg-black/65 border border-yellow-400/45 p-3 space-y-1">
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-yellow-200">
-                  Waktu Nyata Penampil
-                </div>
-                <div className="font-mono text-3xl sm:text-4xl font-black tabular-nums text-yellow-300">
-                  {formatJurusElapsedMs(activeElapsedMs)}
-                </div>
-                <div className="text-[11px] font-semibold text-white">
-                  {activePerformer === 'blue' ? 'Sudut Biru Tampil' : 'Sudut Merah Tampil'}
-                </div>
-              </div>
-            </section>
+                      <div className={`grid grid-cols-4 gap-2 text-center ${finalBlueStatsBg} rounded-2xl p-3 border`}>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isBlueLoser ? 'text-zinc-400' : 'text-sky-100/80'}`}>
+                            Median
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isBlueLoser ? 'text-zinc-200' : 'text-yellow-300'}`}>
+                            {formatJurusScore(blueSummary.median)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isBlueLoser ? 'text-zinc-400' : 'text-sky-100/80'}`}>
+                            Potongan
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isBlueLoser ? 'text-zinc-300' : 'text-rose-300'}`}>
+                            -{formatJurusScore(blueSummary.penaltyTotal)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isBlueLoser ? 'text-zinc-400' : 'text-sky-100/80'}`}>
+                            Waktu
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isBlueLoser ? 'text-zinc-200' : 'text-white'}`}>
+                            {formatJurusElapsedMs(blueElapsedMs)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isBlueLoser ? 'text-zinc-400' : 'text-sky-100/80'}`}>
+                            Std. Dev
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isBlueLoser ? 'text-zinc-300' : 'text-sky-100'}`}>
+                            {(blueSummary.stdDev / 100).toFixed(3)}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
 
-            {/* Sudut Merah Jurus International Broadcast Card */}
-            <section
-              className={`lg:col-span-5 rounded-3xl ${redSectionBg} border-2 p-4 sm:p-6 flex flex-col justify-between shadow-2xl transition-all duration-300 ease-out origin-center relative overflow-hidden ${
-                redPulse
-                  ? 'scale-[1.02] border-yellow-300 ring-4 ring-yellow-300/80 shadow-[0_0_45px_rgba(250,204,21,0.45)] z-10'
-                  : activePerformer === 'red'
-                  ? 'scale-100 border-yellow-300 ring-2 ring-yellow-300/45'
-                  : redTrailing
-                  ? 'scale-100 border-slate-500/60'
-                  : 'scale-100 border-rose-300/65'
-              }`}
+                    {/* Center Official Winner Summary Tower */}
+                    <section className="lg:col-span-2 rounded-3xl bg-gradient-to-b from-[#130a29]/95 via-[#0b0618]/95 to-black/95 border border-yellow-400/55 p-4 flex flex-col items-center justify-between gap-3 text-center shadow-2xl">
+                      <div className="w-full pb-2.5 border-b border-white/10 space-y-1">
+                        <div className="text-[11px] font-extrabold uppercase tracking-[0.2em] text-yellow-300 flex items-center justify-center gap-1.5">
+                          <Trophy className="w-4 h-4" />
+                          <span>Hasil Resmi</span>
+                        </div>
+                        <div className="font-display text-lg sm:text-xl font-black uppercase text-white">
+                          {jurusType}
+                        </div>
+                      </div>
+
+                      <div className="w-full rounded-2xl bg-black/65 border border-yellow-400/40 p-3 space-y-1.5">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                          Pemenang
+                        </div>
+                        <div
+                          data-testid="scoreboard-jurus-winner-label"
+                          className={`font-display text-xl sm:text-2xl font-black uppercase leading-tight ${
+                            winner === 'blue'
+                              ? 'text-sky-300'
+                              : winner === 'red'
+                              ? 'text-rose-300'
+                              : 'text-yellow-300'
+                          }`}
+                        >
+                          {winner === 'blue'
+                            ? 'Sudut Biru'
+                            : winner === 'red'
+                            ? 'Sudut Merah'
+                            : 'Seri'}
+                        </div>
+                        <div className="text-xs font-bold text-white line-clamp-2">
+                          {winner === 'blue'
+                            ? activeMatch.blueName
+                            : winner === 'red'
+                            ? activeMatch.redName
+                            : 'Skor Seimbang'}
+                        </div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-yellow-300 pt-1">
+                          {activeMatch.winMethod || 'Menang Angka'}
+                        </div>
+                      </div>
+
+                      <div className="w-full rounded-2xl bg-black/65 border border-purple-500/45 p-3 space-y-1">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">
+                          Skor Akhir
+                        </div>
+                        <div className="font-mono text-xl sm:text-2xl font-black tabular-nums text-yellow-300">
+                          {formatJurusScore(blueSummary.finalScore)} &ndash; {formatJurusScore(redSummary.finalScore)}
+                        </div>
+                        <button
+                          type="button"
+                          data-fullscreen-ignore="true"
+                          onClick={() => onNavigate('sekretaris')}
+                          className="mt-2 w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black font-bold text-xs cursor-pointer transition-colors"
+                        >
+                          Panel Sekretaris
+                        </button>
+                      </div>
+                    </section>
+
+                    {/* Sudut Merah Final Card */}
+                    <section
+                      data-testid="scoreboard-jurus-red-corner"
+                      data-corner-tone={isRedLoser ? 'gray' : 'red'}
+                      className={`lg:col-span-5 rounded-3xl ${finalRedSectionBg} border-2 p-4 sm:p-6 flex flex-col justify-between shadow-2xl transition-all duration-300 relative overflow-hidden ${
+                        isRedWinner
+                          ? 'border-yellow-300 ring-2 ring-yellow-300/60'
+                          : isRedLoser
+                          ? 'border-zinc-400/60'
+                          : 'border-rose-300/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4 mb-2 flex-row-reverse text-right">
+                        <AthletePortrait
+                          photo={resolvedRedPhoto}
+                          corner="red"
+                          weightClass={activeMatch.weightClass}
+                          alt={activeMatch.redName}
+                          mutedGray={isRedLoser}
+                          className="w-24 h-32 sm:w-28 sm:h-36"
+                        />
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2 pb-1 border-b border-white/15">
+                            {isRedWinner ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wider shrink-0">
+                                <Trophy className="w-3 h-3" />
+                                Pemenang
+                              </span>
+                            ) : isRedLoser ? (
+                              <span className="px-2 py-0.5 rounded bg-zinc-600/80 text-zinc-200 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                                Sudut Merah
+                              </span>
+                            ) : (
+                              <span />
+                            )}
+                            <div className="flex items-center justify-end gap-2.5 min-w-0">
+                              <span
+                                className={`text-xs sm:text-sm font-semibold uppercase tracking-wide truncate ${
+                                  isRedLoser ? 'text-zinc-300' : 'text-rose-100/90'
+                                }`}
+                              >
+                                {redCountry.name}
+                              </span>
+                              <span
+                                className={`font-mono text-sm sm:text-base font-black tracking-wider ${
+                                  isRedLoser ? 'text-zinc-300' : 'text-yellow-300'
+                                }`}
+                              >
+                                {redCountry.code}
+                              </span>
+                              <CountryFlag code={redCountry.code} name={redCountry.name} className="w-9 h-6" />
+                            </div>
+                          </div>
+                          <h2
+                            className={`font-display text-3xl sm:text-4xl xl:text-5xl font-black tracking-tight uppercase leading-[1.03] line-clamp-2 ${
+                              isRedLoser ? 'text-zinc-200' : 'text-white'
+                            }`}
+                          >
+                            {activeMatch.redName}
+                          </h2>
+                          <div
+                            className={`text-xs sm:text-sm font-semibold truncate ${
+                              isRedLoser ? 'text-zinc-300' : 'text-rose-100/80'
+                            }`}
+                          >
+                            {activeMatch.redContingent}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="my-1 sm:my-2 flex-1 flex items-center justify-center">
+                        <div
+                          data-testid="scoreboard-jurus-red-score"
+                          className={`font-mono text-[5.5rem] sm:text-[7.5rem] lg:text-[9rem] xl:text-[10.5rem] 2xl:text-[12rem] leading-[0.88] tracking-tighter font-black tabular-nums ${
+                            isRedLoser
+                              ? 'text-zinc-200 drop-shadow-[0_6px_18px_rgba(0,0,0,0.45)]'
+                              : 'text-white drop-shadow-[0_8px_24px_rgba(0,0,0,0.5)]'
+                          }`}
+                        >
+                          {formatJurusScore(redSummary.finalScore)}
+                        </div>
+                      </div>
+
+                      <div className={`grid grid-cols-4 gap-2 text-center ${finalRedStatsBg} rounded-2xl p-3 border`}>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isRedLoser ? 'text-zinc-400' : 'text-rose-100/80'}`}>
+                            Median
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isRedLoser ? 'text-zinc-200' : 'text-yellow-300'}`}>
+                            {formatJurusScore(redSummary.median)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isRedLoser ? 'text-zinc-400' : 'text-rose-100/80'}`}>
+                            Potongan
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isRedLoser ? 'text-zinc-300' : 'text-rose-300'}`}>
+                            -{formatJurusScore(redSummary.penaltyTotal)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isRedLoser ? 'text-zinc-400' : 'text-rose-100/80'}`}>
+                            Waktu
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isRedLoser ? 'text-zinc-200' : 'text-white'}`}>
+                            {formatJurusElapsedMs(redElapsedMs)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={`text-[11px] uppercase tracking-wider font-semibold ${isRedLoser ? 'text-zinc-400' : 'text-rose-100/80'}`}>
+                            Std. Dev
+                          </div>
+                          <div className={`font-mono text-lg sm:text-xl font-bold tabular-nums ${isRedLoser ? 'text-zinc-300' : 'text-rose-100'}`}>
+                            {(redSummary.stdDev / 100).toFixed(3)}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            /* SINGLE-PERFORMER JURUS LIVE MONITOR (Shows ONLY the active performing corner) */
+            <div
+              data-testid="scoreboard-jurus-single-performer"
+              data-active-corner={activePerformer}
+              className="flex-1 grid grid-cols-1 lg:grid-cols-12 items-stretch gap-3 sm:gap-4"
             >
-              {/* Athlete Identity with Portrait (Right Edge) + Flag + Name */}
-              <div className="flex items-center gap-4 mb-2 flex-row-reverse text-right">
-                <AthletePortrait
-                  photo={resolvedRedPhoto}
-                  corner="red"
-                  weightClass={activeMatch.weightClass}
-                  alt={activeMatch.redName}
-                  trailing={redTrailing}
-                  className="w-24 h-32 sm:w-28 sm:h-36"
-                />
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 pb-1 border-b border-white/15">
-                    {activePerformer === 'red' ? (
-                      <span className="px-2 py-0.5 rounded bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wider shrink-0">
-                        Sedang Tampil
-                      </span>
-                    ) : (
-                      <span />
-                    )}
-                    <div className="flex items-center justify-end gap-2.5 min-w-0">
-                      <span className="text-xs sm:text-sm font-semibold uppercase tracking-wide text-rose-100/90 truncate">
-                        {redCountry.name}
-                      </span>
-                      <span className="font-mono text-sm sm:text-base font-black tracking-wider text-yellow-300">
-                        {redCountry.code}
-                      </span>
-                      <CountryFlag code={redCountry.code} name={redCountry.name} className="w-9 h-6" />
+              {(() => {
+                const isBlue = activePerformer === 'blue';
+                const performerName = isBlue ? activeMatch.blueName : activeMatch.redName;
+                const performerContingent = isBlue ? activeMatch.blueContingent : activeMatch.redContingent;
+                const performerPhoto = isBlue ? resolvedBluePhoto : resolvedRedPhoto;
+                const performerCountry = isBlue ? blueCountry : redCountry;
+                const performerPulse = isBlue ? bluePulse : redPulse;
+                const performerBg = isBlue
+                  ? 'bg-gradient-to-br from-[#0d47a1] via-[#103888] to-[#081b4b]'
+                  : 'bg-gradient-to-br from-[#b91c1c] via-[#991b1b] to-[#450a0a]';
+                const performerStatsBg = isBlue
+                  ? 'bg-[#040d26]/70 border-sky-300/30'
+                  : 'bg-[#260508]/70 border-rose-300/30';
+                const performerAccentBorder = isBlue ? 'border-sky-300/75' : 'border-rose-300/75';
+                const performerLabelColor = isBlue ? 'text-sky-100/90' : 'text-rose-100/90';
+                const performerSubColor = isBlue ? 'text-sky-100/80' : 'text-rose-100/80';
+
+                return (
+                  <section
+                    data-testid={isBlue ? 'scoreboard-jurus-blue-corner' : 'scoreboard-jurus-red-corner'}
+                    data-corner-tone={isBlue ? 'blue' : 'red'}
+                    className={`lg:col-span-9 rounded-3xl ${performerBg} border-2 p-5 sm:p-7 flex flex-col justify-between shadow-2xl transition-all duration-300 ease-out origin-center relative overflow-hidden ${
+                      performerPulse
+                        ? 'scale-[1.01] border-yellow-300 ring-4 ring-yellow-300/80 shadow-[0_0_45px_rgba(250,204,21,0.45)] z-10'
+                        : `${performerAccentBorder} ring-2 ring-yellow-300/45`
+                    }`}
+                  >
+                    {/* Athlete Identity Row */}
+                    <div className="flex items-center gap-4 sm:gap-6 mb-2">
+                      <AthletePortrait
+                        photo={performerPhoto}
+                        corner={activePerformer}
+                        weightClass={activeMatch.weightClass}
+                        alt={performerName}
+                        className="w-28 h-36 sm:w-32 sm:h-44 xl:w-36 xl:h-48"
+                      />
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-white/15">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <CountryFlag
+                              code={performerCountry.code}
+                              name={performerCountry.name}
+                              className="w-10 h-6 sm:w-11 sm:h-7"
+                            />
+                            <span className="font-mono text-base sm:text-lg font-black tracking-wider text-yellow-300">
+                              {performerCountry.code}
+                            </span>
+                            <span className={`text-xs sm:text-sm font-bold uppercase tracking-wider truncate ${performerLabelColor}`}>
+                              {performerCountry.name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="px-2.5 py-0.5 rounded bg-black/45 border border-white/25 text-white text-[11px] font-bold uppercase tracking-wider">
+                              {isBlue ? 'Sudut Biru' : 'Sudut Merah'}
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded bg-yellow-400 text-black text-[11px] font-black uppercase tracking-wider">
+                              Sedang Tampil
+                            </span>
+                          </div>
+                        </div>
+
+                        <h2 className="font-display text-4xl sm:text-5xl xl:text-6xl font-black tracking-tight uppercase text-white leading-[1.02] line-clamp-2">
+                          {performerName}
+                        </h2>
+                        <div className={`text-sm sm:text-lg font-semibold truncate ${performerSubColor}`}>
+                          {performerContingent}
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Monumental Live Tabular Score */}
+                    <div className="my-2 flex-1 flex items-center justify-center">
+                      <div
+                        data-testid={isBlue ? 'scoreboard-jurus-blue-score' : 'scoreboard-jurus-red-score'}
+                        className={`font-mono text-[6.5rem] sm:text-[9.5rem] lg:text-[12rem] xl:text-[14rem] 2xl:text-[16rem] leading-[0.86] tracking-tighter font-black tabular-nums transition-all duration-300 ease-out ${
+                          performerPulse
+                            ? 'scale-110 text-yellow-200 drop-shadow-[0_0_28px_rgba(250,204,21,0.75)]'
+                            : 'scale-100 text-white drop-shadow-[0_10px_28px_rgba(0,0,0,0.55)]'
+                        }`}
+                      >
+                        {formatJurusScore(activeCornerSummary.finalScore)}
+                      </div>
+                    </div>
+
+                    {/* 4-Cell IPSI Jurus Telemetry */}
+                    <div className={`grid grid-cols-4 gap-3 text-center ${performerStatsBg} rounded-2xl p-3.5 sm:p-4 border transition-colors duration-300`}>
+                      <div>
+                        <div className={`text-xs uppercase tracking-wider font-semibold ${performerSubColor}`}>
+                          Median
+                        </div>
+                        <div className="font-mono text-xl sm:text-2xl font-bold tabular-nums text-yellow-300 mt-0.5">
+                          {formatJurusScore(activeCornerSummary.median)}
+                        </div>
+                      </div>
+                      <div className="border-l border-white/10">
+                        <div className={`text-xs uppercase tracking-wider font-semibold ${performerSubColor}`}>
+                          Potongan
+                        </div>
+                        <div className="font-mono text-xl sm:text-2xl font-bold tabular-nums text-rose-300 mt-0.5">
+                          -{formatJurusScore(activeCornerSummary.penaltyTotal)}
+                        </div>
+                      </div>
+                      <div className="border-l border-white/10">
+                        <div className={`text-xs uppercase tracking-wider font-semibold ${performerSubColor}`}>
+                          Waktu
+                        </div>
+                        <div className="font-mono text-xl sm:text-2xl font-bold tabular-nums text-white mt-0.5">
+                          {formatJurusElapsedMs(activeElapsedMs)}
+                        </div>
+                      </div>
+                      <div className="border-l border-white/10">
+                        <div className={`text-xs uppercase tracking-wider font-semibold ${performerSubColor}`}>
+                          Std. Dev
+                        </div>
+                        <div className={`font-mono text-xl sm:text-2xl font-bold tabular-nums mt-0.5 ${performerLabelColor}`}>
+                          {(activeCornerSummary.stdDev / 100).toFixed(3)}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
+
+              {/* Right Arena Category & Waktu Nyata Penampil Tower */}
+              <section className="lg:col-span-3 rounded-3xl bg-gradient-to-b from-[#130a29]/95 via-[#0b0618]/95 to-black/95 border border-purple-600/55 p-5 sm:p-6 flex flex-col items-center justify-between gap-5 text-center shadow-2xl">
+                <div className="w-full pb-4 border-b border-white/10 space-y-1.5">
+                  <div className="text-xs font-extrabold uppercase tracking-[0.22em] text-sky-300">
+                    Jurus TGRS
                   </div>
-                  <h2 className="font-display text-3xl sm:text-4xl xl:text-5xl font-black tracking-tight uppercase text-white leading-[1.03] line-clamp-2">
-                    {activeMatch.redName}
-                  </h2>
-                  <div className="text-xs sm:text-sm font-semibold text-rose-100/80 truncate">
-                    {activeMatch.redContingent}
+                  <div className="font-display text-2xl sm:text-3xl font-black uppercase text-yellow-300">
+                    {jurusType}
+                  </div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-white/85 pt-0.5">
+                    {activeMatch.matchNumber} &middot; {activeMatch.stage}
                   </div>
                 </div>
-              </div>
 
-              <div className="my-1 sm:my-2 flex-1 flex items-center justify-center">
                 <div
-                  data-testid="scoreboard-jurus-red-score"
-                  className={`font-mono text-[5.5rem] sm:text-[7.5rem] lg:text-[9rem] xl:text-[10.5rem] 2xl:text-[12rem] leading-[0.88] tracking-tighter font-black tabular-nums transition-all duration-300 ease-out ${
-                    redPulse
-                      ? 'scale-110 text-yellow-200 drop-shadow-[0_0_28px_rgba(250,204,21,0.75)]'
-                      : 'scale-100 text-white drop-shadow-[0_8px_24px_rgba(0,0,0,0.5)]'
-                  }`}
+                  data-testid="scoreboard-jurus-elapsed-panel"
+                  className="w-full flex-1 rounded-2xl bg-black/65 border border-yellow-400/50 p-5 flex flex-col items-center justify-center gap-3"
                 >
-                  {formatJurusScore(redSummary.finalScore)}
-                </div>
-              </div>
-
-              <div className={`grid grid-cols-4 gap-2 text-center ${redStatsBg} rounded-2xl p-3 border transition-colors duration-300`}>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-rose-100/80 font-semibold">Median</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-yellow-300">
-                    {formatJurusScore(redSummary.median)}
+                  <div className="text-xs sm:text-sm font-bold uppercase tracking-[0.18em] text-yellow-200">
+                    Waktu Nyata Penampil
+                  </div>
+                  <div
+                    data-testid="scoreboard-jurus-elapsed-timer"
+                    className="font-mono text-5xl sm:text-6xl xl:text-[4rem] font-black tabular-nums tracking-tight text-yellow-300 leading-none"
+                  >
+                    {formatJurusElapsedMs(activeElapsedMs)}
+                  </div>
+                  <div className="text-xs font-bold uppercase tracking-widest text-sky-300">
+                    {statusText}
+                  </div>
+                  <div className="text-sm font-bold uppercase tracking-wider text-white pt-1">
+                    {activePerformer === 'blue' ? 'Sudut Biru Tampil' : 'Sudut Merah Tampil'}
                   </div>
                 </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-rose-100/80 font-semibold">Potongan</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-rose-300">
-                    -{formatJurusScore(redSummary.penaltyTotal)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-rose-100/80 font-semibold">Waktu</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-white">
-                    {formatJurusElapsedMs(redElapsedMs)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-rose-100/80 font-semibold">Std. Dev</div>
-                  <div className="font-mono text-lg sm:text-xl font-bold tabular-nums text-rose-100">
-                    {(redSummary.stdDev / 100).toFixed(3)}
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+              </section>
+            </div>
+          )
         ) : isInterRoundBreak ? (
           <div
             data-testid="scoreboard-break-upcoming"
@@ -1169,47 +1445,60 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
 
       {/* Bottom Broadcast Console Strip */}
       {isJurus ? (
-        <footer className="relative z-10 px-6 py-3 bg-[#080412]/95 border-t border-purple-700/50 flex flex-wrap items-center justify-between gap-4">
-          <div className="text-xs sm:text-sm font-bold uppercase tracking-wider text-sky-200">
-            <span>{arena.name}</span>
-            <span aria-hidden="true" className="mx-2 text-yellow-400/70">&middot;</span>
-            <span className="text-yellow-300">{activeMatch.matchNumber}</span>
-            <span aria-hidden="true" className="mx-2 text-yellow-400/70">&middot;</span>
-            <span className="text-white">{activeMatch.stage}</span>
-            <span aria-hidden="true" className="mx-2 text-yellow-400/70">&middot;</span>
-            <span className="text-white">{activeMatch.weightClass}</span>
-            <span aria-hidden="true" className="mx-2 text-yellow-400/70">&middot;</span>
-            <span className="text-yellow-300">
-              {activePerformer === 'blue' ? 'Sudut Biru Tampil' : 'Sudut Merah Tampil'}
-            </span>
-          </div>
-          <div
-            data-testid="scoreboard-jurus-judges"
-            className="flex flex-wrap items-center justify-center gap-2 sm:gap-3"
-          >
-            {jurusJudgeIds.map((jid, idx) => {
-              const jScore = getJurusJudgeScore(activeCornerData, jid);
-              const locked = jScore.submitted;
-              const total = activeCornerSummary.judgeTotals[idx] ?? 0;
-              return (
-                <div
-                  key={jid}
-                  data-testid={`scoreboard-jurus-judge-${jid}`}
-                  className={`${
-                    jurusJudgeCount > 6 ? 'px-2.5 py-1 text-xs' : 'px-3.5 py-1.5 text-xs sm:text-sm'
-                  } rounded-xl border font-mono font-bold tabular-nums flex items-center gap-1.5 ${
-                    locked
-                      ? 'bg-emerald-950/75 border-emerald-400 text-emerald-200'
-                      : 'bg-black/70 border-purple-500/45 text-white'
-                  }`}
-                >
-                  <span>Juri {jid}:</span>
-                  <span className="text-yellow-300">{formatJurusScore(total)}</span>
-                  {locked && <Lock className="w-3.5 h-3.5 text-emerald-300" />}
-                </div>
-              );
-            })}
-          </div>
+        <footer className="relative z-10 px-4 sm:px-6 py-3 bg-[#080412]/95 border-t border-emerald-600/45">
+          {(() => {
+            const footerCorner: Corner = isJurusFinished
+              ? activeMatch.winner === 'blue' || activeMatch.winner === 'red'
+                ? activeMatch.winner
+                : activePerformer
+              : activePerformer;
+            const footerCornerData = jurusState[footerCorner];
+            const footerSummary = footerCorner === 'blue' ? blueSummary : redSummary;
+            const gridColsClass =
+              ({
+                3: 'grid-cols-3',
+                4: 'grid-cols-2 sm:grid-cols-4',
+                5: 'grid-cols-2 sm:grid-cols-5',
+                6: 'grid-cols-3 sm:grid-cols-6',
+                7: 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-7',
+                8: 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-8',
+                9: 'grid-cols-3 sm:grid-cols-5 lg:grid-cols-9',
+                10: 'grid-cols-2 sm:grid-cols-5 lg:grid-cols-10',
+              } as Record<number, string>)[jurusJudgeIds.length] || 'grid-cols-2 sm:grid-cols-5';
+
+            return (
+              <div
+                data-testid="scoreboard-jurus-judges"
+                className={`w-full max-w-[1440px] mx-auto grid ${gridColsClass} gap-2.5 sm:gap-3 items-stretch justify-center`}
+              >
+                {jurusJudgeIds.map((jid, idx) => {
+                  const jScore = getJurusJudgeScore(footerCornerData, jid);
+                  const locked = jScore.submitted;
+                  const total = footerSummary.judgeTotals[idx] ?? 0;
+                  return (
+                    <div
+                      key={jid}
+                      data-testid={`scoreboard-jurus-judge-${jid}`}
+                      data-judge-tone="green"
+                      className={`rounded-xl border px-3 py-2.5 sm:py-3 font-mono tabular-nums flex flex-col items-center justify-center gap-0.5 text-center transition-colors ${
+                        locked
+                          ? 'bg-emerald-700/90 border-emerald-300 text-white shadow-[0_0_16px_rgba(16,185,129,0.32)]'
+                          : 'bg-emerald-900/85 border-emerald-500/75 text-emerald-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold uppercase tracking-wider text-emerald-200">
+                        <span>Juri {jid}</span>
+                        {locked && <Lock className="w-3.5 h-3.5 text-emerald-100" />}
+                      </div>
+                      <div className="text-lg sm:text-xl xl:text-2xl font-black text-yellow-300 leading-tight">
+                        {formatJurusScore(total)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </footer>
       ) : (
         <footer className="relative z-10 px-6 py-3 bg-[#080412]/95 border-t border-purple-700/50 flex flex-wrap items-center justify-between gap-4">
@@ -1350,8 +1639,8 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
         </div>
       )}
 
-      {/* International Winner Celebration Overlay */}
-      {activeMatch.status === 'finished' && activeMatch.winner && (
+      {/* International Winner Celebration Overlay (Tanding only — Jurus transitions to dual-corner final scoreboard) */}
+      {!isJurus && activeMatch.status === 'finished' && activeMatch.winner && (
         <div className="fixed inset-0 z-50 bg-black/88 backdrop-blur-md flex items-center justify-center p-4 sm:p-6">
           <div
             className={`max-w-3xl w-full rounded-3xl border-2 p-6 sm:p-9 text-center space-y-5 shadow-2xl ${
@@ -1423,6 +1712,7 @@ export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
             <div className="pt-2">
               <button
                 type="button"
+                data-fullscreen-ignore="true"
                 onClick={() => onNavigate('sekretaris')}
                 className="min-h-[44px] px-6 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black font-bold text-sm cursor-pointer transition-colors"
               >

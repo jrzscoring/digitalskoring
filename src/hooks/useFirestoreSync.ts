@@ -19,21 +19,28 @@ import { db, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from
 import type { ArenaData, AthleteData, BracketMatchSlot, MatchData, MatchEvent } from '../types/silat';
 import {
   acquireOfflineSyncLock,
+  clearPendingFirestoreOps,
+  enqueueIndexedDbSyncBatch,
   getBackupStorageKey,
+  getIndexedDbSyncQueue,
+  getIndexedDbSyncQueueCount,
   getPendingFirestoreOps,
   isBrowserOnline,
   isOfflineNetworkError,
   isPermissionDeniedError,
   isRtdbBackupDirty,
+  markIndexedDbSyncItemAttempt,
   markRtdbBackupSynced,
   readOfflineBackup,
   readRecordFromIndexedDb,
   releaseOfflineSyncLock,
+  removeIndexedDbSyncItems,
   removePendingFirestoreOps,
   saveFirestoreSnapshotBackup,
   saveRtdbLocalBackup,
   type LocalStorePayload,
   type OfflineBackupRecord,
+  type QueuedSyncEntry,
 } from '../utils/offlineSync';
 
 export type { LocalStorePayload };
@@ -131,6 +138,7 @@ export function useFirestoreSync({
   const tabTokenRef = useRef<string>(`tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
   const flushingRtdbRef = useRef(false);
   const flushingFirestoreRef = useRef(false);
+  const hasPendingRtdbQueueRef = useRef(false);
 
   const isFirestoreActive = Boolean(user && cloudArena);
 
@@ -164,26 +172,113 @@ export function useFirestoreSync({
     };
   }, []);
 
-  // Flush dirty localStorage backup to Firebase Realtime Database when online & connected
+  // Flush queued RTDB updates from IndexedDB (and dirty local backup) to Firebase RTDB when online & connected
   const flushRtdbBackup = useCallback(
     async (targetId: string) => {
       if (!rtdb || !isBrowserOnline() || flushingRtdbRef.current) return;
-      const backup = readOfflineBackup(targetId);
-      if (!backup || backup.targetBackend !== 'rtdb' || !backup.dirty) return;
+
+      const initialQueue = await getIndexedDbSyncQueue(targetId, 'rtdb');
+      const initialBackup =
+        readOfflineBackup(targetId) ??
+        (await readRecordFromIndexedDb<OfflineBackupRecord>(getBackupStorageKey(targetId)));
+      const hasDirtyBackup = Boolean(
+        initialBackup && initialBackup.targetBackend === 'rtdb' && initialBackup.dirty
+      );
+
+      if (initialQueue.length === 0 && !hasDirtyBackup) {
+        hasPendingRtdbQueueRef.current = false;
+        onPendingOpsCountChange?.(0);
+        return;
+      }
 
       if (!acquireOfflineSyncLock(targetId, tabTokenRef.current)) return;
       flushingRtdbRef.current = true;
       try {
-        // Loop if newer local edits arrived while the write was in flight
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          const latest = readOfflineBackup(targetId);
-          if (!latest || latest.targetBackend !== 'rtdb' || !latest.dirty) break;
-          const writtenVersion = latest.lastUpdatedAtMs;
-          await set(ref(rtdb, `silat_arenas/${targetId}`), sanitizeForRtdb(latest.payload));
-          markRtdbBackupSynced(targetId, writtenVersion);
+        // Loop if newer offline score edits arrived while the Firebase write was in flight
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          if (!isBrowserOnline()) break;
+
+          const queueEntries = await getIndexedDbSyncQueue(targetId, 'rtdb');
+          const latestBackup =
+            readOfflineBackup(targetId) ??
+            (await readRecordFromIndexedDb<OfflineBackupRecord>(getBackupStorageKey(targetId)));
+          const backupDirty = Boolean(
+            latestBackup && latestBackup.targetBackend === 'rtdb' && latestBackup.dirty
+          );
+
+          if (queueEntries.length === 0 && !backupDirty) {
+            hasPendingRtdbQueueRef.current = false;
+            onPendingOpsCountChange?.(0);
+            break;
+          }
+
+          if (queueEntries.length > 0) {
+            const fullPath = `silat_arenas/${targetId}`;
+            const hasOnlyFullSnapshots = queueEntries.every(
+              (entry) => (!entry.rtdbPath || entry.rtdbPath === fullPath) && entry.rtdbPayload
+            );
+
+            if (hasOnlyFullSnapshots) {
+              const latestEntry = queueEntries[queueEntries.length - 1];
+              const payloadToSync = latestEntry.rtdbPayload as LocalStorePayload;
+              await set(ref(rtdb, fullPath), sanitizeForRtdb(payloadToSync));
+              await removeIndexedDbSyncItems(queueEntries.map((e) => e.id));
+              markRtdbBackupSynced(targetId, latestBackup?.lastUpdatedAtMs);
+              const remaining = await getIndexedDbSyncQueueCount(targetId, 'rtdb');
+              hasPendingRtdbQueueRef.current = remaining > 0;
+              onPendingOpsCountChange?.(remaining);
+            } else {
+              // Replay granular sub-path entries in strict chronological order
+              let networkFailed = false;
+              for (const entry of queueEntries) {
+                const targetPath = entry.rtdbPath || fullPath;
+                if (entry.rtdbPayload === undefined) {
+                  await removeIndexedDbSyncItems([entry.id]);
+                  continue;
+                }
+                try {
+                  await set(ref(rtdb, targetPath), entry.rtdbPayload);
+                  await removeIndexedDbSyncItems([entry.id]);
+                  const remaining = await getIndexedDbSyncQueueCount(targetId, 'rtdb');
+                  hasPendingRtdbQueueRef.current = remaining > 0;
+                  onPendingOpsCountChange?.(remaining);
+                } catch (entryErr) {
+                  if (isOfflineNetworkError(entryErr)) {
+                    await markIndexedDbSyncItemAttempt(
+                      entry.id,
+                      entryErr instanceof Error ? entryErr.message : 'Network error'
+                    );
+                    networkFailed = true;
+                    break;
+                  }
+                  throw entryErr;
+                }
+              }
+              if (networkFailed) break;
+              if (backupDirty && latestBackup) {
+                markRtdbBackupSynced(targetId, latestBackup.lastUpdatedAtMs);
+              }
+            }
+          } else if (backupDirty && latestBackup) {
+            const writtenVersion = latestBackup.lastUpdatedAtMs;
+            await set(ref(rtdb, `silat_arenas/${targetId}`), sanitizeForRtdb(latestBackup.payload));
+            markRtdbBackupSynced(targetId, writtenVersion);
+            hasPendingRtdbQueueRef.current = false;
+            onPendingOpsCountChange?.(0);
+          }
         }
         setSyncError(null);
       } catch (err) {
+        const currentQueue = await getIndexedDbSyncQueue(targetId, 'rtdb');
+        if (currentQueue[0]) {
+          await markIndexedDbSyncItemAttempt(
+            currentQueue[0].id,
+            err instanceof Error ? err.message : 'Unknown error'
+          );
+        }
+        hasPendingRtdbQueueRef.current = currentQueue.length > 0 || isRtdbBackupDirty(targetId);
+        onPendingOpsCountChange?.(currentQueue.length);
+
         if (!isOfflineNetworkError(err)) {
           setSyncError(
             `Gagal sinkronisasi ke Firebase RTDB (${userRtdbProjectId || 'rtdb'}): ${
@@ -196,26 +291,48 @@ export function useFirestoreSync({
         releaseOfflineSyncLock(targetId, tabTokenRef.current);
       }
     },
-    []
+    [onPendingOpsCountChange]
   );
 
-  // Replay queued Firestore offline operations in chronological order when online again
+  // Replay queued Firestore offline operations from IndexedDB in chronological order when online again
   const flushPendingFirestoreOps = useCallback(
     async (targetArenaId: string) => {
       if (!isBrowserOnline() || !user || !targetArenaId || flushingFirestoreRef.current) return;
-      const initialOps = getPendingFirestoreOps(targetArenaId);
-      onPendingOpsCountChange?.(initialOps.length);
-      if (initialOps.length === 0) return;
+
+      // Read durable queue from IndexedDB first; migrate any legacy localStorage ops if needed
+      let idbEntries = await getIndexedDbSyncQueue(targetArenaId, 'firestore');
+      if (idbEntries.length === 0) {
+        const legacyOps = getPendingFirestoreOps(targetArenaId);
+        if (legacyOps.length > 0) {
+          idbEntries = await enqueueIndexedDbSyncBatch(
+            legacyOps.map((op) => ({
+              arenaId: targetArenaId,
+              backend: 'firestore' as const,
+              kind: 'score_update' as const,
+              firestoreOp: op,
+            }))
+          );
+        }
+      }
+
+      onPendingOpsCountChange?.(idbEntries.length);
+      if (idbEntries.length === 0) return;
 
       if (!acquireOfflineSyncLock(targetArenaId, tabTokenRef.current)) return;
       flushingFirestoreRef.current = true;
       try {
         while (isBrowserOnline()) {
-          const ops = getPendingFirestoreOps(targetArenaId);
-          onPendingOpsCountChange?.(ops.length);
-          if (ops.length === 0) break;
+          const entries: QueuedSyncEntry[] = await getIndexedDbSyncQueue(targetArenaId, 'firestore');
+          onPendingOpsCountChange?.(entries.length);
+          if (entries.length === 0) break;
 
-          const op = ops[0];
+          const entry = entries[0];
+          const op = entry.firestoreOp;
+          if (!op) {
+            await removeIndexedDbSyncItems([entry.id]);
+            continue;
+          }
+
           const path = op.pathSegments.join('/');
           const docRef = doc(db, path);
           const payloadData: Record<string, unknown> = op.data ? { ...op.data } : {};
@@ -236,11 +353,20 @@ export function useFirestoreSync({
             } else {
               await updateDoc(docRef, payloadData);
             }
-            const remaining = removePendingFirestoreOps(targetArenaId, [op.id]);
-            onPendingOpsCountChange?.(remaining.length);
+            await removeIndexedDbSyncItems([entry.id]);
+            removePendingFirestoreOps(targetArenaId, [op.id]);
+            const remainingCount = await getIndexedDbSyncQueueCount(targetArenaId, 'firestore');
+            if (remainingCount === 0) {
+              clearPendingFirestoreOps(targetArenaId);
+            }
+            onPendingOpsCountChange?.(remainingCount);
           } catch (err) {
             if (isOfflineNetworkError(err)) {
-              // Connection dropped mid-replay; keep remaining ops safely in localStorage
+              // Connection dropped mid-replay; keep remaining ops safely in IndexedDB
+              await markIndexedDbSyncItemAttempt(
+                entry.id,
+                err instanceof Error ? err.message : 'Network offline'
+              );
               break;
             }
             if (isPermissionDeniedError(err)) {
@@ -253,8 +379,13 @@ export function useFirestoreSync({
               handleFirestoreError(err, opEnum, path);
             }
             // Non-network error (e.g., not-found on an already-deleted doc): drop stale op so queue doesn't stall
-            const remaining = removePendingFirestoreOps(targetArenaId, [op.id]);
-            onPendingOpsCountChange?.(remaining.length);
+            await removeIndexedDbSyncItems([entry.id]);
+            removePendingFirestoreOps(targetArenaId, [op.id]);
+            const remainingCount = await getIndexedDbSyncQueueCount(targetArenaId, 'firestore');
+            if (remainingCount === 0) {
+              clearPendingFirestoreOps(targetArenaId);
+            }
+            onPendingOpsCountChange?.(remainingCount);
           }
         }
         setSyncError(null);
@@ -266,7 +397,40 @@ export function useFirestoreSync({
     [user, onPendingOpsCountChange]
   );
 
-  // 1. Firebase Realtime Database (window.firebaseConfig) real-time sync with localStorage backup
+  // Hydrate unsynced IndexedDB queue count & snapshot on startup / arena switch for RTDB mode
+  useEffect(() => {
+    if (isFirestoreActive) return;
+    let cancelled = false;
+    void (async () => {
+      const queueEntries = await getIndexedDbSyncQueue(rtdbArenaId, 'rtdb');
+      if (cancelled) return;
+      hasPendingRtdbQueueRef.current = queueEntries.length > 0 || isRtdbBackupDirty(rtdbArenaId);
+      onPendingOpsCountChange?.(queueEntries.length);
+
+      const latestQueued = queueEntries[queueEntries.length - 1]?.rtdbPayload as
+        | LocalStorePayload
+        | undefined;
+      if (latestQueued?.arena && Array.isArray(latestQueued.matches) && latestQueued.matches.length > 0) {
+        onRtdbSync(latestQueued);
+      } else {
+        const idbBackup = await readRecordFromIndexedDb<OfflineBackupRecord>(
+          getBackupStorageKey(rtdbArenaId)
+        );
+        if (!cancelled && idbBackup?.dirty && idbBackup.payload?.matches?.length) {
+          onRtdbSync(idbBackup.payload);
+        }
+      }
+
+      if (!cancelled && rtdb && rtdbConnected && isBrowserOnline() && hasPendingRtdbQueueRef.current) {
+        void flushRtdbBackup(rtdbArenaId);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rtdbArenaId, isFirestoreActive, rtdbConnected, onPendingOpsCountChange, onRtdbSync, flushRtdbBackup]);
+
+  // 1. Firebase Realtime Database (window.firebaseConfig) real-time sync with IndexedDB queue backup
   useEffect(() => {
     if (!rtdb || isFirestoreActive) {
       setRtdbConnected(false);
@@ -277,8 +441,14 @@ export function useFirestoreSync({
     const unsubConn = onValue(connectedRef, (snap) => {
       const connected = Boolean(snap.val());
       setRtdbConnected(connected);
-      if (connected && isBrowserOnline() && isRtdbBackupDirty(rtdbArenaId)) {
-        void flushRtdbBackup(rtdbArenaId);
+      if (connected && isBrowserOnline()) {
+        void getIndexedDbSyncQueueCount(rtdbArenaId, 'rtdb').then((count) => {
+          hasPendingRtdbQueueRef.current = count > 0 || isRtdbBackupDirty(rtdbArenaId);
+          onPendingOpsCountChange?.(count);
+          if (hasPendingRtdbQueueRef.current) {
+            void flushRtdbBackup(rtdbArenaId);
+          }
+        });
       }
     });
 
@@ -286,8 +456,8 @@ export function useFirestoreSync({
     const unsubArena = onValue(
       arenaRtdbRef,
       (snap) => {
-        // Protect unsynced localStorage backup from being overwritten by stale remote data
-        if (isRtdbBackupDirty(rtdbArenaId)) {
+        // Protect unsynced IndexedDB/localStorage score queue from being overwritten by stale remote data
+        if (hasPendingRtdbQueueRef.current || isRtdbBackupDirty(rtdbArenaId)) {
           if (isBrowserOnline()) {
             void flushRtdbBackup(rtdbArenaId);
           }
@@ -328,14 +498,17 @@ export function useFirestoreSync({
       unsubConn();
       unsubArena();
     };
-  }, [rtdbArenaId, isFirestoreActive, getSeedPayload, onRtdbSync, flushRtdbBackup]);
+  }, [rtdbArenaId, isFirestoreActive, getSeedPayload, onRtdbSync, flushRtdbBackup, onPendingOpsCountChange]);
 
   // Trigger RTDB flush automatically whenever browser comes back online while connected
   useEffect(() => {
     if (!rtdb || isFirestoreActive || !isOnline || !rtdbConnected) return;
-    if (isRtdbBackupDirty(rtdbArenaId)) {
-      void flushRtdbBackup(rtdbArenaId);
-    }
+    void getIndexedDbSyncQueueCount(rtdbArenaId, 'rtdb').then((count) => {
+      hasPendingRtdbQueueRef.current = count > 0 || isRtdbBackupDirty(rtdbArenaId);
+      if (hasPendingRtdbQueueRef.current) {
+        void flushRtdbBackup(rtdbArenaId);
+      }
+    });
   }, [isOnline, rtdbConnected, isFirestoreActive, rtdbArenaId, reconnectTick, flushRtdbBackup]);
 
   // 2. Cloud Firestore arena & matches real-time subscription when authenticated (with offline backup fallback)
@@ -352,13 +525,17 @@ export function useFirestoreSync({
 
     const targetArenaId = joinedArenaId || sanitizeId(`arena-${user.uid.slice(0, 12)}`);
     const arenaRef = doc(db, 'arenas', targetArenaId);
-    onPendingOpsCountChange?.(getPendingFirestoreOps(targetArenaId).length);
-
+    let cancelled = false;
     let unsubArena: (() => void) | null = null;
     let unsubMatches: (() => void) | null = null;
     let unsubAthletes: (() => void) | null = null;
     let unsubBrackets: (() => void) | null = null;
-    let cancelled = false;
+
+    void getIndexedDbSyncQueueCount(targetArenaId, 'firestore').then((idbCount) => {
+      if (!cancelled) {
+        onPendingOpsCountChange?.(Math.max(idbCount, getPendingFirestoreOps(targetArenaId).length));
+      }
+    });
 
     const applyBackupPayload = (backup: OfflineBackupRecord | null): boolean => {
       if (backup && backup.payload?.arena && Array.isArray(backup.payload.matches) && backup.payload.matches.length > 0) {
@@ -522,8 +699,9 @@ export function useFirestoreSync({
           }
         );
 
-        // Flush any queued offline Firestore ops immediately upon reconnecting
-        if (getPendingFirestoreOps(targetArenaId).length > 0) {
+        // Flush any queued offline Firestore ops in IndexedDB immediately upon reconnecting
+        const pendingIdb = await getIndexedDbSyncQueueCount(targetArenaId, 'firestore');
+        if (pendingIdb > 0 || getPendingFirestoreOps(targetArenaId).length > 0) {
           void flushPendingFirestoreOps(targetArenaId);
         }
       } catch (err) {
@@ -595,23 +773,31 @@ export function useFirestoreSync({
     if (!isFirestoreActive || !cloudArena || !isOnline || cloudMatches.length === 0) return;
     if (getPendingFirestoreOps(cloudArena.id).length > 0) return;
 
-    const existingBackup = readOfflineBackup(cloudArena.id);
-    const eventsByMatch: Record<string, MatchEvent[]> = {
-      ...(existingBackup?.payload.eventsByMatch || {}),
-    };
-    if (effectiveActiveMatchId) {
-      eventsByMatch[effectiveActiveMatchId] = cloudEvents;
-    }
+    let cancelled = false;
+    void getIndexedDbSyncQueueCount(cloudArena.id, 'firestore').then((pendingIdb) => {
+      if (cancelled || pendingIdb > 0) return;
 
-    const mirrored: LocalStorePayload = {
-      arena: cloudArena,
-      matches: cloudMatches,
-      eventsByMatch,
-      athletes: cloudAthletes,
-      brackets: cloudBrackets,
+      const existingBackup = readOfflineBackup(cloudArena.id);
+      const eventsByMatch: Record<string, MatchEvent[]> = {
+        ...(existingBackup?.payload.eventsByMatch || {}),
+      };
+      if (effectiveActiveMatchId) {
+        eventsByMatch[effectiveActiveMatchId] = cloudEvents;
+      }
+
+      const mirrored: LocalStorePayload = {
+        arena: cloudArena,
+        matches: cloudMatches,
+        eventsByMatch,
+        athletes: cloudAthletes,
+        brackets: cloudBrackets,
+      };
+      saveFirestoreSnapshotBackup(cloudArena.id, mirrored);
+      onFirestoreMirror?.(mirrored);
+    });
+    return () => {
+      cancelled = true;
     };
-    saveFirestoreSnapshotBackup(cloudArena.id, mirrored);
-    onFirestoreMirror?.(mirrored);
   }, [
     isFirestoreActive,
     isOnline,
@@ -627,21 +813,29 @@ export function useFirestoreSync({
   // 6. Auto-flush queued Firestore operations when online & authenticated
   useEffect(() => {
     if (!isOnline || !user || !cloudArena) return;
-    if (getPendingFirestoreOps(cloudArena.id).length > 0) {
-      void flushPendingFirestoreOps(cloudArena.id);
-    }
+    void getIndexedDbSyncQueueCount(cloudArena.id, 'firestore').then((pendingIdb) => {
+      if (pendingIdb > 0 || getPendingFirestoreOps(cloudArena.id).length > 0) {
+        void flushPendingFirestoreOps(cloudArena.id);
+      }
+    });
   }, [isOnline, user, cloudArena, reconnectTick, flushPendingFirestoreOps]);
 
-  // 7. Background retry safety timer ONLY while online and pending sync exists
+  // 7. Background retry safety timer ONLY while online and pending sync exists in IndexedDB
   useEffect(() => {
     if (!isOnline) return;
     const interval = window.setInterval(() => {
       if (isFirestoreActive && cloudArena) {
-        if (getPendingFirestoreOps(cloudArena.id).length > 0) {
-          void flushPendingFirestoreOps(cloudArena.id);
-        }
-      } else if (rtdb && rtdbConnected && isRtdbBackupDirty(rtdbArenaId)) {
-        void flushRtdbBackup(rtdbArenaId);
+        void getIndexedDbSyncQueueCount(cloudArena.id, 'firestore').then((pendingIdb) => {
+          if (pendingIdb > 0 || getPendingFirestoreOps(cloudArena.id).length > 0) {
+            void flushPendingFirestoreOps(cloudArena.id);
+          }
+        });
+      } else if (rtdb && rtdbConnected) {
+        void getIndexedDbSyncQueueCount(rtdbArenaId, 'rtdb').then((pendingIdb) => {
+          if (pendingIdb > 0 || isRtdbBackupDirty(rtdbArenaId)) {
+            void flushRtdbBackup(rtdbArenaId);
+          }
+        });
       }
     }, 5000);
     return () => window.clearInterval(interval);
@@ -659,8 +853,11 @@ export function useFirestoreSync({
     if (!isBrowserOnline()) return;
     if (isFirestoreActive && cloudArena) {
       await flushPendingFirestoreOps(cloudArena.id);
-    } else if (rtdb && isRtdbBackupDirty(rtdbArenaId)) {
-      await flushRtdbBackup(rtdbArenaId);
+    } else if (rtdb) {
+      const pendingIdb = await getIndexedDbSyncQueueCount(rtdbArenaId, 'rtdb');
+      if (pendingIdb > 0 || isRtdbBackupDirty(rtdbArenaId)) {
+        await flushRtdbBackup(rtdbArenaId);
+      }
     }
   }, [isFirestoreActive, cloudArena, rtdbArenaId, flushPendingFirestoreOps, flushRtdbBackup]);
 

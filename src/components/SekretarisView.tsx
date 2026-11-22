@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle,
+  AlertCircle,
   ArrowLeft,
   Award,
   CalendarDays,
@@ -12,16 +12,18 @@ import {
   History,
   ImagePlus,
   ListChecks,
+  Loader2,
   Maximize2,
   Minimize2,
-  RotateCcw,
   Search,
+  Settings,
   Trophy,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import { useArena } from '../context/ArenaContext';
+import { useFullscreenState } from '../hooks/useAutoFullscreen';
 import type { AppView } from '../types/silat';
 import {
   JURUS_JUDGE_COUNT_OPTIONS,
@@ -29,6 +31,7 @@ import {
   getJurusJudgeCount,
   getJurusType,
   isJurusMatch,
+  validateJurusJudgeCountInput,
 } from '../utils/ipsiRules';
 import { exportArenaSummaryPdf, exportMatchPdf } from '../utils/pdfExport';
 import {
@@ -44,6 +47,7 @@ import {
 
 type SekretarisSection =
   | 'identitas'
+  | 'pengaturan'
   | 'input-atlet'
   | 'bagan-bracket'
   | 'kontrol-partai'
@@ -94,7 +98,6 @@ function readAndResizeLogo(file: File): Promise<string> {
 
 export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const {
-    mode,
     syncError,
     arena,
     matches,
@@ -103,7 +106,6 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     updateArenaMeta,
     setActiveMatch,
     setMatchJurusJudgeCount,
-    resetMatch,
   } = useArena();
 
   const [tournamentName, setTournamentName] = useState(arena.tournamentName);
@@ -111,21 +113,25 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const [eventDate, setEventDate] = useState(arena.eventDate || '');
   const [logoLeft, setLogoLeft] = useState(arena.logoLeft || '');
   const [logoRight, setLogoRight] = useState(arena.logoRight || '');
-  const [arenaSaved, setArenaSaved] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'synced' | 'saving' | 'invalid'>('synced');
 
   const [historySearch, setHistorySearch] = useState('');
   const [showAllReadyModal, setShowAllReadyModal] = useState(false);
   const [readyModalSearch, setReadyModalSearch] = useState('');
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showResetMatchModal, setShowResetMatchModal] = useState(false);
-  const [isResettingMatch, setIsResettingMatch] = useState(false);
-  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreenState();
 
   const [activeSection, setActiveSection] = useState<SekretarisSection>('identitas');
   const [registrasiMenuOpen, setRegistrasiMenuOpen] = useState(false);
   const [laporanMenuOpen, setLaporanMenuOpen] = useState(false);
+  const [selectedPengaturanMatchId, setSelectedPengaturanMatchId] = useState<string>(activeMatch.id);
+  const [judgeCountInput, setJudgeCountInput] = useState<string>('');
+  const [judgeCountError, setJudgeCountError] = useState<string | null>(null);
+  const [judgeCountSavedMsg, setJudgeCountSavedMsg] = useState<string | null>(null);
   const menuContainerRef = useRef<HTMLDivElement>(null);
   const laporanContainerRef = useRef<HTMLDivElement>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const hasUserEditedMetaRef = useRef(false);
+  const judgeInputRef = useRef<HTMLInputElement>(null);
 
   const isRegistrasiSection =
     activeSection === 'input-atlet' ||
@@ -135,6 +141,25 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     activeSection === 'laporan-medali' ||
     activeSection === 'laporan-atlet' ||
     activeSection === 'laporan-jadwal';
+
+  const jurusMatches = useMemo(
+    () => matches.filter((m) => isJurusMatch(m)),
+    [matches]
+  );
+
+  useEffect(() => {
+    if (isJurusMatch(activeMatch)) {
+      setSelectedPengaturanMatchId(activeMatch.id);
+    } else if (jurusMatches.length > 0 && !jurusMatches.some((m) => m.id === selectedPengaturanMatchId)) {
+      const nextReadyJurus = jurusMatches.find((m) => m.status !== 'finished') || jurusMatches[0];
+      if (nextReadyJurus) setSelectedPengaturanMatchId(nextReadyJurus.id);
+    }
+  }, [activeMatch, jurusMatches, selectedPengaturanMatchId]);
+
+  const targetJurusMatch = useMemo(
+    () => jurusMatches.find((m) => m.id === selectedPengaturanMatchId) || jurusMatches[0] || null,
+    [jurusMatches, selectedPengaturanMatchId]
+  );
 
   const finishedMatches = useMemo(() => {
     return matches
@@ -209,9 +234,6 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
         setRegistrasiMenuOpen(false);
         setLaporanMenuOpen(false);
         setShowAllReadyModal(false);
-        if (!isResettingMatch) {
-          setShowResetMatchModal(false);
-        }
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -222,45 +244,118 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     };
   }, []);
 
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
 
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      } else {
-        await document.exitFullscreen();
-      }
-    } catch {
-      // ignore fullscreen denial in sandbox/headless environments
+
+  const targetJurusMatchId = targetJurusMatch?.id;
+  const targetJurusJudgeCount = targetJurusMatch?.jurusJudgeCount;
+
+  useEffect(() => {
+    setJudgeCountInput(targetJurusJudgeCount ? String(targetJurusJudgeCount) : '');
+    setJudgeCountError(null);
+  }, [targetJurusMatchId, targetJurusJudgeCount]);
+
+  useEffect(() => {
+    if (!hasUserEditedMetaRef.current) {
+      setTournamentName(arena.tournamentName);
+      setVenue(arena.venue || '');
+      setEventDate(arena.eventDate || '');
+      setLogoLeft(arena.logoLeft || '');
+      setLogoRight(arena.logoRight || '');
     }
-  };
-
-  useEffect(() => {
-    setTournamentName(arena.tournamentName);
-    setVenue(arena.venue || '');
-    setEventDate(arena.eventDate || '');
-    setLogoLeft(arena.logoLeft || '');
-    setLogoRight(arena.logoRight || '');
   }, [arena.tournamentName, arena.venue, arena.eventDate, arena.logoLeft, arena.logoRight]);
 
-  const handleSaveArena = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await updateArenaMeta({
+  const persistArenaMeta = useCallback(
+    async (nextMeta: {
+      tournamentName: string;
+      venue: string;
+      eventDate: string;
+      logoLeft: string;
+      logoRight: string;
+    }) => {
+      if (!nextMeta.tournamentName.trim()) {
+        setAutoSaveStatus('invalid');
+        return;
+      }
+      setAutoSaveStatus('saving');
+      try {
+        await updateArenaMeta(nextMeta);
+        hasUserEditedMetaRef.current = false;
+        setAutoSaveStatus('synced');
+      } catch {
+        setAutoSaveStatus('synced');
+      }
+    },
+    [updateArenaMeta]
+  );
+
+  useEffect(() => {
+    if (!hasUserEditedMetaRef.current) return;
+    if (!tournamentName.trim()) {
+      setAutoSaveStatus('invalid');
+      return;
+    }
+
+    const changed =
+      tournamentName.trim() !== arena.tournamentName.trim() ||
+      venue.trim() !== (arena.venue || '').trim() ||
+      eventDate.trim() !== (arena.eventDate || '').trim() ||
+      logoLeft !== (arena.logoLeft || '') ||
+      logoRight !== (arena.logoRight || '');
+
+    if (!changed) {
+      hasUserEditedMetaRef.current = false;
+      setAutoSaveStatus('synced');
+      return;
+    }
+
+    setAutoSaveStatus('saving');
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void persistArenaMeta({
+        tournamentName,
+        venue,
+        eventDate,
+        logoLeft,
+        logoRight,
+      });
+    }, 450);
+
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    tournamentName,
+    venue,
+    eventDate,
+    logoLeft,
+    logoRight,
+    arena.tournamentName,
+    arena.venue,
+    arena.eventDate,
+    arena.logoLeft,
+    arena.logoRight,
+    persistArenaMeta,
+  ]);
+
+  const flushAutoSaveMeta = () => {
+    if (!hasUserEditedMetaRef.current) return;
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    void persistArenaMeta({
       tournamentName,
       venue,
       eventDate,
       logoLeft,
       logoRight,
     });
-    setArenaSaved(true);
-    setTimeout(() => setArenaSaved(false), 1800);
   };
 
   const handleLogoChange = async (
@@ -271,11 +366,21 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     if (!file) return;
     try {
       const resized = await readAndResizeLogo(file);
+      const nextLeft = side === 'left' ? resized : logoLeft;
+      const nextRight = side === 'right' ? resized : logoRight;
       if (side === 'left') {
         setLogoLeft(resized);
       } else {
         setLogoRight(resized);
       }
+      hasUserEditedMetaRef.current = true;
+      await persistArenaMeta({
+        tournamentName,
+        venue,
+        eventDate,
+        logoLeft: nextLeft,
+        logoRight: nextRight,
+      });
     } catch {
       // ignore invalid file
     } finally {
@@ -283,32 +388,62 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
     }
   };
 
-  const activeMatchEvents = useMemo(
-    () => getMatchEvents(activeMatch.id),
-    [getMatchEvents, activeMatch.id]
-  );
+  const handleRemoveLogo = async (side: 'left' | 'right') => {
+    const nextLeft = side === 'left' ? '' : logoLeft;
+    const nextRight = side === 'right' ? '' : logoRight;
+    if (side === 'left') {
+      setLogoLeft('');
+    } else {
+      setLogoRight('');
+    }
+    hasUserEditedMetaRef.current = true;
+    await persistArenaMeta({
+      tournamentName,
+      venue,
+      eventDate,
+      logoLeft: nextLeft,
+      logoRight: nextRight,
+    });
+  };
 
-  const activeViolationsCount =
-    activeMatch.blueBinaan +
-    activeMatch.blueTeguran1 +
-    activeMatch.blueTeguran2 +
-    activeMatch.bluePeringatan +
-    activeMatch.redBinaan +
-    activeMatch.redTeguran1 +
-    activeMatch.redTeguran2 +
-    activeMatch.redPeringatan;
+  const handleSelectJurusJudgeCount = async (matchId: string, count: number) => {
+    setJudgeCountError(null);
+    setJudgeCountInput(String(count));
+    await setMatchJurusJudgeCount(matchId, count);
+    setJudgeCountSavedMsg(`${count} Juri Bertugas disinkronkan ke Panel Juri, Dewan, dan Monitor.`);
+    window.setTimeout(() => setJudgeCountSavedMsg(null), 3000);
+  };
 
-  const handleConfirmResetMatch = async () => {
-    setIsResettingMatch(true);
-    try {
-      await resetMatch(activeMatch.id);
-      setShowResetMatchModal(false);
-      setResetSuccessMsg(
-        `${activeMatch.matchNumber} (${activeMatch.blueName} vs ${activeMatch.redName}) telah direset ke awal (Skor 0 - 0, Babak 1, Pelanggaran & Log kosong).`
+  const handleJudgeCountInputChange = (raw: string) => {
+    setJudgeCountInput(raw);
+    const validation = validateJurusJudgeCountInput(raw);
+    if (!validation.valid) {
+      setJudgeCountError(
+        validation.error || 'Jumlah juri harus berupa angka bulat antara 4 sampai 10.'
       );
-      window.setTimeout(() => setResetSuccessMsg(null), 5000);
-    } finally {
-      setIsResettingMatch(false);
+      setJudgeCountSavedMsg(null);
+      return;
+    }
+    setJudgeCountError(null);
+    if (targetJurusMatch && targetJurusMatch.status !== 'finished' && validation.value !== undefined) {
+      void handleSelectJurusJudgeCount(targetJurusMatch.id, validation.value);
+    }
+  };
+
+  const handleJudgeCountManualSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const validation = validateJurusJudgeCountInput(judgeCountInput);
+    if (!validation.valid || validation.value === undefined) {
+      setJudgeCountError(
+        validation.error || 'Jumlah juri harus berupa angka bulat antara 4 sampai 10.'
+      );
+      setJudgeCountSavedMsg(null);
+      judgeInputRef.current?.focus();
+      return;
+    }
+    setJudgeCountError(null);
+    if (targetJurusMatch && targetJurusMatch.status !== 'finished') {
+      void handleSelectJurusJudgeCount(targetJurusMatch.id, validation.value);
     }
   };
 
@@ -360,7 +495,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-950/80 hover:bg-blue-900 border border-blue-500/45 hover:border-yellow-400 text-white font-semibold text-sm flex items-center gap-2 whitespace-nowrap cursor-pointer transition-colors"
               >
                 <ClipboardList className="w-4 h-4 text-yellow-300" />
-                <span>Identitas &amp; Partai</span>
+                <span>Daftar Partai</span>
               </button>
             )}
             <div ref={laporanContainerRef} className="relative">
@@ -526,6 +661,25 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              data-testid="sekretaris-nav-pengaturan-btn"
+              aria-pressed={activeSection === 'pengaturan'}
+              onClick={() => {
+                setActiveSection('pengaturan');
+                setRegistrasiMenuOpen(false);
+                setLaporanMenuOpen(false);
+              }}
+              className={`min-h-[42px] px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-all ${
+                activeSection === 'pengaturan'
+                  ? 'bg-yellow-300 border-2 border-white text-black shadow-lg shadow-yellow-400/35'
+                  : 'bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 border border-yellow-200 text-black shadow-md shadow-yellow-500/20'
+              }`}
+            >
+              <Settings className="w-4 h-4 text-black shrink-0" />
+              <span>Pengaturan</span>
+            </button>
           </nav>
 
           <div className="order-2 sm:order-3 flex items-center justify-end">
@@ -557,12 +711,228 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
           <RekapAtletPanel />
         ) : activeSection === 'laporan-jadwal' ? (
           <JadwalPertandinganPanel />
-        ) : (
+        ) : activeSection === 'pengaturan' ? (
         <div className={`grid grid-cols-1 lg:grid-cols-2 items-start ${isFullscreen ? 'gap-3.5' : 'gap-5'}`}>
-          {/* Kolom Kiri: Identitas Kejuaraan + Inisialisasi & Reset Pertandingan */}
-          <div className="space-y-5">
-          <form onSubmit={handleSaveArena} className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-5 space-y-4">
-            <h2 className="font-display text-xl font-bold text-yellow-300">Identitas Kejuaraan</h2>
+          {/* Kolom Kiri Pengaturan: Pilihan Juri Bertugas (Jurus TGRS) */}
+          <section
+            aria-label="Pilihan Juri Bertugas Kategori Jurus"
+            data-testid="sekretaris-pengaturan-jurus-panel"
+            className="rounded-2xl bg-[#0d051c]/90 border border-yellow-400/50 p-5 space-y-4"
+          >
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-yellow-300 shrink-0" />
+                <h2 className="font-display text-xl font-bold text-yellow-300">
+                  Pilihan Juri Bertugas (Jurus TGRS)
+                </h2>
+              </div>
+              <p className="text-xs text-blue-200 leading-relaxed">
+                Tentukan jumlah juri bertugas (4 s/d 10 juri) untuk partai kategori Jurus TGRS. Pengaturan otomatis tersinkron ke Panel Juri, Dewan, dan Monitor.
+              </p>
+            </div>
+
+            {jurusMatches.length === 0 ? (
+              <div className="rounded-xl bg-black/55 border border-dashed border-purple-700/60 p-6 text-center space-y-3">
+                <p className="text-xs text-blue-200">
+                  Belum ada partai kategori Jurus TGRS yang terdaftar. Buat partai Jurus terlebih dahulu melalui menu Kontrol Partai.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('kontrol-partai')}
+                  className="min-h-[38px] px-4 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Buka Kontrol Partai
+                </button>
+              </div>
+            ) : targetJurusMatch && (
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="pengaturan-jurus-match-select" className="block text-xs font-medium text-blue-200 mb-1.5">
+                    Pilih Partai Jurus TGRS
+                  </label>
+                  <select
+                    id="pengaturan-jurus-match-select"
+                    data-testid="pengaturan-jurus-match-select"
+                    value={targetJurusMatch.id}
+                    onChange={(e) => setSelectedPengaturanMatchId(e.target.value)}
+                    className="w-full min-h-[42px] px-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-white text-sm font-medium focus:outline-none focus:border-yellow-400 cursor-pointer"
+                  >
+                    {jurusMatches.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.matchNumber} · {getJurusType(m)} · {m.blueName} vs {m.redName}
+                        {m.id === activeMatch.id ? ' (Partai Aktif)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-blue-200 border-t border-b border-purple-800/50 py-3">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="font-semibold text-white">
+                      {targetJurusMatch.matchNumber} &middot; {getJurusType(targetJurusMatch)} &middot; {targetJurusMatch.stage}
+                    </div>
+                    <div className="text-blue-200/85 truncate">
+                      {targetJurusMatch.blueName} ({targetJurusMatch.blueContingent}) vs {targetJurusMatch.redName} ({targetJurusMatch.redContingent})
+                    </div>
+                  </div>
+                  <div className="font-mono text-sm font-bold text-yellow-300 tabular-nums whitespace-nowrap">
+                    {targetJurusMatch.jurusJudgeCount
+                      ? `${targetJurusMatch.jurusJudgeCount} Juri Bertugas`
+                      : '3 Juri (Awal)'}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-blue-100">
+                      Pilih Jumlah Juri Bertugas (4 s/d 10)
+                    </span>
+                    {!targetJurusMatch.jurusJudgeCount && (
+                      <span className="text-[11px] text-yellow-300/90">
+                        Panel Juri saat ini: 3 Juri (Awal)
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                    {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => {
+                      const isSelected = targetJurusMatch.jurusJudgeCount === cnt;
+                      return (
+                        <button
+                          key={cnt}
+                          type="button"
+                          disabled={targetJurusMatch.status === 'finished'}
+                          aria-pressed={isSelected}
+                          data-testid={`pengaturan-jurus-judge-btn-${cnt}`}
+                          onClick={() => void handleSelectJurusJudgeCount(targetJurusMatch.id, cnt)}
+                          className={`min-h-[44px] px-2 py-2 rounded-xl border text-xs font-bold whitespace-nowrap cursor-pointer transition-all disabled:opacity-45 disabled:cursor-not-allowed ${
+                            isSelected
+                              ? 'bg-yellow-400 border-yellow-200 text-black shadow-md shadow-yellow-400/25'
+                              : 'bg-black/65 border-blue-500/45 text-white hover:border-yellow-400 hover:bg-blue-950/60'
+                          }`}
+                        >
+                          {cnt} Juri
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Input Manual + Validasi Angka Bulat 4..10 */}
+                  <form onSubmit={handleJudgeCountManualSubmit} className="pt-2 space-y-2">
+                    <label
+                      htmlFor="pengaturan-jurus-judge-input"
+                      className="block text-xs font-medium text-blue-200"
+                    >
+                      Atau Masukkan Jumlah Juri (Angka Bulat 4–10)
+                    </label>
+                    <div className="flex items-stretch gap-2">
+                      <input
+                        ref={judgeInputRef}
+                        id="pengaturan-jurus-judge-input"
+                        data-testid="pengaturan-jurus-judge-input"
+                        type="text"
+                        inputMode="numeric"
+                        disabled={targetJurusMatch.status === 'finished'}
+                        value={judgeCountInput}
+                        onChange={(e) => handleJudgeCountInputChange(e.target.value)}
+                        aria-invalid={Boolean(judgeCountError)}
+                        aria-describedby={judgeCountError ? 'pengaturan-jurus-input-error' : undefined}
+                        placeholder="Contoh: 5"
+                        className={`flex-1 min-h-[42px] px-3 py-2 rounded-lg text-sm font-mono font-bold tabular-nums transition-colors focus:outline-none disabled:opacity-45 ${
+                          judgeCountError
+                            ? 'bg-rose-950/40 border-2 border-rose-500 ring-2 ring-rose-500/35 text-rose-100 placeholder:text-rose-300/60'
+                            : 'bg-black/65 border border-blue-500/45 text-white placeholder:text-blue-300/55 focus:border-yellow-400'
+                        }`}
+                      />
+                      <button
+                        type="submit"
+                        data-testid="pengaturan-jurus-apply-btn"
+                        disabled={targetJurusMatch.status === 'finished'}
+                        className="min-h-[42px] px-4 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Terapkan
+                      </button>
+                    </div>
+
+                    {judgeCountError && (
+                      <div
+                        id="pengaturan-jurus-input-error"
+                        role="alert"
+                        data-testid="pengaturan-jurus-input-error"
+                        className="rounded-lg bg-rose-950/85 border border-rose-400/75 px-3 py-2 text-xs text-rose-100 flex items-start gap-2"
+                      >
+                        <AlertCircle className="w-4 h-4 text-rose-300 shrink-0 mt-0.5" />
+                        <span>{judgeCountError}</span>
+                      </div>
+                    )}
+                  </form>
+
+                  {targetJurusMatch.status === 'finished' ? (
+                    <p className="text-xs text-rose-300">
+                      Partai ini sudah selesai sehingga jumlah juri dikunci.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-blue-200/85">
+                      Tersinkron ke: Panel Juri (1&ndash;{getJurusJudgeCount(targetJurusMatch)}) &middot; Panel Dewan &middot; Monitor Scoreboard
+                    </p>
+                  )}
+
+                  {judgeCountSavedMsg && !judgeCountError && (
+                    <div
+                      role="status"
+                      data-testid="pengaturan-jurus-saved-status"
+                      className="rounded-lg bg-emerald-950/85 border border-emerald-400/60 px-3 py-2 text-xs text-emerald-200 flex items-center gap-2"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+                      <span>{judgeCountSavedMsg}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Kolom Kanan Pengaturan: Input Identitas Kejuaraan (Auto-Save ke Firebase RTDB) */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              flushAutoSaveMeta();
+            }}
+            data-testid="sekretaris-pengaturan-identitas-panel"
+            className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-5 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-display text-xl font-bold text-yellow-300">Identitas Kejuaraan</h2>
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="pengaturan-identitas-autosave-status"
+                className={`text-xs font-semibold flex items-center gap-1.5 ${
+                  autoSaveStatus === 'invalid'
+                    ? 'text-amber-300'
+                    : autoSaveStatus === 'saving'
+                    ? 'text-yellow-300'
+                    : 'text-emerald-300'
+                }`}
+              >
+                {autoSaveStatus === 'invalid' ? (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>Nama kejuaraan wajib diisi</span>
+                  </>
+                ) : autoSaveStatus === 'saving' ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>Menyimpan otomatis ke Firebase...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>Tersimpan otomatis ke Firebase</span>
+                  </>
+                )}
+              </div>
+            </div>
 
             <div className="space-y-3">
               <div>
@@ -573,9 +943,18 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                   id="tournament-name"
                   type="text"
                   value={tournamentName}
-                  onChange={(e) => setTournamentName(e.target.value)}
+                  onChange={(e) => {
+                    hasUserEditedMetaRef.current = true;
+                    setTournamentName(e.target.value);
+                  }}
+                  onBlur={flushAutoSaveMeta}
                   maxLength={120}
-                  className="w-full min-h-[42px] px-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-white placeholder:text-blue-300/60 text-sm focus:outline-none focus:border-yellow-400"
+                  aria-invalid={!tournamentName.trim()}
+                  className={`w-full min-h-[42px] px-3 py-2 rounded-lg text-white placeholder:text-blue-300/60 text-sm focus:outline-none ${
+                    !tournamentName.trim()
+                      ? 'bg-rose-950/35 border-2 border-rose-500'
+                      : 'bg-black/65 border border-blue-500/45 focus:border-yellow-400'
+                  }`}
                 />
               </div>
 
@@ -588,7 +967,11 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     id="venue-input"
                     type="text"
                     value={venue}
-                    onChange={(e) => setVenue(e.target.value)}
+                    onChange={(e) => {
+                      hasUserEditedMetaRef.current = true;
+                      setVenue(e.target.value);
+                    }}
+                    onBlur={flushAutoSaveMeta}
                     placeholder="Contoh: GOR Padepokan IPSI"
                     maxLength={120}
                     className="w-full min-h-[42px] px-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-white placeholder:text-blue-300/60 text-sm focus:outline-none focus:border-yellow-400"
@@ -602,7 +985,11 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     id="event-date-input"
                     type="text"
                     value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
+                    onChange={(e) => {
+                      hasUserEditedMetaRef.current = true;
+                      setEventDate(e.target.value);
+                    }}
+                    onBlur={flushAutoSaveMeta}
                     placeholder="Contoh: 13-15 Nov 2026 · 08.00 WIB"
                     maxLength={80}
                     className="w-full min-h-[42px] px-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-white placeholder:text-blue-300/60 text-sm focus:outline-none focus:border-yellow-400"
@@ -617,7 +1004,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     {logoLeft && (
                       <button
                         type="button"
-                        onClick={() => setLogoLeft('')}
+                        onClick={() => void handleRemoveLogo('left')}
                         aria-label="Hapus Logo Sisi Kiri"
                         className="text-xs text-yellow-300 hover:text-yellow-200 flex items-center gap-1 cursor-pointer"
                       >
@@ -657,7 +1044,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     {logoRight && (
                       <button
                         type="button"
-                        onClick={() => setLogoRight('')}
+                        onClick={() => void handleRemoveLogo('right')}
                         aria-label="Hapus Logo Sisi Kanan"
                         className="text-xs text-yellow-300 hover:text-yellow-200 flex items-center gap-1 cursor-pointer"
                       >
@@ -693,135 +1080,14 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </div>
             </div>
 
-            <div className="flex items-center justify-end pt-1">
-              <button
-                type="submit"
-                className="min-h-[40px] px-4 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold whitespace-nowrap cursor-pointer transition-colors"
-              >
-                {arenaSaved ? 'Tersimpan & Tersinkron' : 'Simpan Identitas'}
-              </button>
-            </div>
+            <p className="text-[11px] text-blue-200/80 pt-1">
+              Setiap perubahan identitas maupun logo kejuaraan langsung tersimpan dan tersinkron otomatis ke seluruh panel.
+            </p>
           </form>
-
-          {/* Inisialisasi & Reset Pertandingan */}
-          <section
-            aria-label="Inisialisasi dan Reset Pertandingan"
-            data-testid="sekretaris-reset-section"
-            className="rounded-2xl bg-[#0d051c]/90 border border-rose-500/50 p-5 space-y-3.5"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <RotateCcw className="w-5 h-5 text-rose-400 shrink-0" />
-                  <h2 className="font-display text-lg font-bold text-white leading-tight">
-                    Inisialisasi Pertandingan Baru
-                  </h2>
-                </div>
-                <p className="text-xs text-blue-200 leading-relaxed">
-                  Mengosongkan seluruh data skor, babak, timer, vote juri, dan pelanggaran partai aktif pada{' '}
-                  {mode === 'firebase' ? 'Firebase Firestore' : mode === 'rtdb' ? 'Firebase Realtime Database' : 'penyimpanan sinkronisasi'} untuk memulai pertandingan baru.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                data-testid="sekretaris-reset-pertandingan-btn"
-                onClick={() => setShowResetMatchModal(true)}
-                className="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 border border-rose-300/70 text-white text-xs sm:text-sm font-bold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer shadow-lg shadow-rose-950/50 transition-colors"
-              >
-                <RotateCcw className="w-4 h-4 shrink-0" />
-                <span>Reset Pertandingan</span>
-              </button>
-            </div>
-
-            <div className="rounded-xl bg-black/60 border border-purple-700/50 p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="px-2 py-0.5 rounded bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 font-mono font-bold shrink-0">
-                    {activeMatch.matchNumber}
-                  </span>
-                  <span className="font-semibold text-white truncate">
-                    {activeMatch.blueName} vs {activeMatch.redName}
-                  </span>
-                </div>
-                <span className="text-[11px] font-mono text-blue-200 shrink-0">
-                  {activeMatch.stage}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-purple-800/50 text-center">
-                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Skor Aktif</div>
-                  <div
-                    data-testid="sekretaris-active-score-summary"
-                    className="font-mono text-sm font-extrabold text-white tabular-nums"
-                  >
-                    {formatMatchScore(activeMatch, 'blue')} - {formatMatchScore(activeMatch, 'red')}
-                  </div>
-                </div>
-                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Babak</div>
-                  <div
-                    data-testid="sekretaris-active-round-summary"
-                    className="font-mono text-sm font-extrabold text-yellow-300 tabular-nums"
-                  >
-                    Babak {activeMatch.currentRound}
-                  </div>
-                </div>
-                <div className="rounded-lg bg-[#110624]/80 px-2 py-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-blue-200">Pelanggaran / Log</div>
-                  <div
-                    data-testid="sekretaris-active-violations-summary"
-                    className="font-mono text-sm font-extrabold text-rose-300 tabular-nums"
-                  >
-                    {activeViolationsCount} / {activeMatchEvents.length}
-                  </div>
-                </div>
-              </div>
-
-              {isJurusMatch(activeMatch) && (
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-purple-800/50">
-                  <div className="text-xs font-semibold text-yellow-300">
-                    Jumlah Juri Bertugas (Jurus {getJurusType(activeMatch)})
-                  </div>
-                  <select
-                    aria-label="Jumlah Juri Jurus Partai Aktif"
-                    data-testid="sekretaris-overview-jurus-judge-count"
-                    value={activeMatch.jurusJudgeCount ?? 3}
-                    disabled={activeMatch.status === 'finished'}
-                    onChange={(e) =>
-                      void setMatchJurusJudgeCount(activeMatch.id, Number(e.target.value))
-                    }
-                    className="min-h-[34px] px-2.5 py-1 rounded-lg bg-black/75 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300 disabled:opacity-50 cursor-pointer"
-                  >
-                    {!activeMatch.jurusJudgeCount && (
-                      <option value={3}>3 Juri (Awal — Pilih 4–10)</option>
-                    )}
-                    {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
-                      <option key={cnt} value={cnt}>
-                        {cnt} Juri
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            {resetSuccessMsg && (
-              <div
-                role="status"
-                data-testid="sekretaris-reset-success-banner"
-                className="rounded-xl bg-emerald-950/85 border border-emerald-400/65 px-3 py-2 text-xs text-emerald-100 flex items-center gap-2"
-              >
-                <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
-                <span>{resetSuccessMsg}</span>
-              </div>
-            )}
-          </section>
-          </div>
-
-          {/* Kolom Kanan: Histori Hasil Tanding + Daftar Partai Siap Bertanding */}
-          <div className="space-y-6">
+        </div>
+        ) : (
+        <div className={`grid grid-cols-1 lg:grid-cols-2 items-start ${isFullscreen ? 'gap-3.5' : 'gap-5'}`}>
+          {/* Kolom Kiri Halaman Awal: Daftar Partai Siap Bertanding & Kolom Kanan: Histori Hasil Tanding */}
           {/* Histori Hasil Tanding */}
           <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-4 space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-purple-800/60">
@@ -1082,7 +1348,6 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </div>
             )}
           </section>
-          </div>
         </div>
         )}
       </main>
@@ -1231,76 +1496,6 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 className="min-h-[40px] px-5 py-2 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-500/60 text-xs font-bold text-white cursor-pointer"
               >
                 Tutup
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Konfirmasi Reset Pertandingan */}
-      {showResetMatchModal && (
-        <div
-          role="alertdialog"
-          aria-modal="true"
-          aria-label="Konfirmasi Reset Pertandingan"
-          data-testid="sekretaris-reset-confirm-modal"
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div className="max-w-md w-full rounded-2xl bg-[#110624] border-2 border-rose-500/80 p-5 sm:p-6 space-y-4 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-rose-600/20 border border-rose-400/60 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5 text-rose-300" />
-                </div>
-                <div>
-                  <h2 className="font-display text-lg font-bold text-white leading-tight">
-                    Reset Pertandingan?
-                  </h2>
-                  <p className="text-xs text-blue-200">
-                    {activeMatch.matchNumber} &middot; {activeMatch.blueName} vs {activeMatch.redName}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={isResettingMatch}
-                aria-label="Tutup Konfirmasi Reset Pertandingan"
-                onClick={() => setShowResetMatchModal(false)}
-                className="p-1.5 rounded-lg bg-black/60 hover:bg-purple-900/60 text-blue-200 hover:text-white cursor-pointer disabled:opacity-40"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="rounded-xl bg-black/60 border border-purple-800/60 p-3 text-xs text-slate-200 space-y-1.5 leading-relaxed">
-              <p>
-                Tindakan ini akan mengosongkan seluruh data partai aktif di Firebase sebagai inisialisasi awal pertandingan baru:
-              </p>
-              <ul className="list-disc pl-4 space-y-0.5 text-blue-100">
-                <li>Skor Sudut Biru &amp; Sudut Merah direset menjadi <strong>0 - 0</strong></li>
-                <li>Babak dikembalikan ke <strong>Babak 1</strong> dengan timer penuh ({activeMatch.roundDurationSec} dtk)</li>
-                <li>Seluruh pelanggaran (Binaan, Teguran, Peringatan), jatuhan, vote juri, verifikasi, dan log event dihapus</li>
-              </ul>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
-              <button
-                type="button"
-                disabled={isResettingMatch}
-                onClick={() => setShowResetMatchModal(false)}
-                className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-white cursor-pointer disabled:opacity-40 transition-colors"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                disabled={isResettingMatch}
-                data-testid="sekretaris-confirm-reset-btn"
-                onClick={() => void handleConfirmResetMatch()}
-                className="min-h-[42px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 border border-rose-300/80 text-xs font-extrabold text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-              >
-                <RotateCcw className={`w-3.5 h-3.5 ${isResettingMatch ? 'animate-spin' : ''}`} />
-                <span>{isResettingMatch ? 'Mereset...' : 'Ya, Reset Pertandingan'}</span>
               </button>
             </div>
           </div>

@@ -7,6 +7,8 @@ import { TimerView } from './components/TimerView';
 import { JuriView } from './components/JuriView';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ScoreboardView } from './components/ScoreboardView';
+import { useAutoFullscreen } from './hooks/useAutoFullscreen';
+import { enterFullscreen, shouldAutoFullscreenView } from './utils/fullscreen';
 import type { AppView } from './types/silat';
 
 const VALID_VIEWS: AppView[] = ['landing', 'sekretaris', 'dewan', 'timer', 'juri', 'scoreboard'];
@@ -34,6 +36,8 @@ function parseViewFromLocation(): AppView {
 export default function App() {
   const [view, setView] = useState<AppView>(() => parseViewFromLocation());
 
+  useAutoFullscreen(shouldAutoFullscreenView(view));
+
   useEffect(() => {
     const onHashChange = () => {
       setView(parseViewFromLocation());
@@ -43,6 +47,9 @@ export default function App() {
   }, []);
 
   const navigate = (nextView: AppView) => {
+    if (shouldAutoFullscreenView(nextView)) {
+      void enterFullscreen();
+    }
     setView(nextView);
     if (nextView === 'landing') {
       window.location.hash = '#/';

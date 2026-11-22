@@ -50,7 +50,6 @@ import {
 } from '../utils/athleteExcel';
 import {
   JURUS_DEFAULT_DURATION_SEC,
-  JURUS_JUDGE_COUNT_OPTIONS,
   computeCornerJurusSummary,
   ensureJurusState,
   formatJurusElapsedMs,
@@ -1843,7 +1842,6 @@ export function KontrolPartaiPanel() {
     updateMatchMeta,
     setActiveMatch,
     setMatchTotalRounds,
-    setMatchJurusJudgeCount,
     resetMatch,
     deleteMatch,
   } = useArena();
@@ -1852,7 +1850,6 @@ export function KontrolPartaiPanel() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newCategory, setNewCategory] = useState<CompetitionCategory>('Jurus');
   const [newJurusType, setNewJurusType] = useState<JurusCategory>('Tunggal Baku');
-  const [newJurusJudgeCount, setNewJurusJudgeCount] = useState<number>(4);
   const [newGender, setNewGender] = useState<AthleteGender>('Putra');
   const [newTandingClass, setNewTandingClass] = useState('Kelas B (50-55 kg)');
   const [newTotalRounds, setNewTotalRounds] = useState<2 | 3>(3);
@@ -1947,7 +1944,6 @@ export function KontrolPartaiPanel() {
       stage: newStage.trim() || 'Final',
       competitionCategory: newCategory,
       jurusType: isJurus ? newJurusType : undefined,
-      jurusJudgeCount: isJurus ? newJurusJudgeCount : undefined,
       totalRounds: isJurus ? 1 : newTotalRounds,
       blueName: newBlueName.trim(),
       blueContingent: newBlueContingent.trim() || '-',
@@ -2070,7 +2066,7 @@ export function KontrolPartaiPanel() {
             </div>
 
             {newCategory === 'Jurus' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-blue-200 mb-1">Kategori Jurus TGRS</label>
                   <select
@@ -2094,22 +2090,6 @@ export function KontrolPartaiPanel() {
                   >
                     <option value="Putra">Putra</option>
                     <option value="Putri">Putri</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-blue-200 mb-1">Jumlah Juri (4–10)</label>
-                  <select
-                    aria-label="Jumlah Juri TGRS Baru"
-                    data-testid="create-jurus-judge-count"
-                    value={newJurusJudgeCount}
-                    onChange={(e) => setNewJurusJudgeCount(Number(e.target.value))}
-                    className="w-full min-h-[36px] px-2.5 rounded-lg bg-black/70 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300"
-                  >
-                    {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
-                      <option key={cnt} value={cnt}>
-                        {cnt} Juri
-                      </option>
-                    ))}
                   </select>
                 </div>
               </div>
@@ -2364,30 +2344,9 @@ export function KontrolPartaiPanel() {
 
           <div className="flex flex-wrap items-center gap-2">
             {isSelectedJurus ? (
-              <>
-                <span className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/50 text-xs font-mono font-semibold text-yellow-300 flex items-center">
-                  {selectedMatch.roundDurationSec}s (TGRS)
-                </span>
-                <select
-                  aria-label={`Jumlah Juri ${selectedMatch.matchNumber}`}
-                  data-testid="sekretaris-jurus-judge-count"
-                  value={selectedMatch.jurusJudgeCount ?? 3}
-                  disabled={selectedMatch.status === 'finished'}
-                  onChange={(e) =>
-                    void setMatchJurusJudgeCount(selectedMatch.id, Number(e.target.value))
-                  }
-                  className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-yellow-300 disabled:opacity-50 cursor-pointer"
-                >
-                  {!selectedMatch.jurusJudgeCount && (
-                    <option value={3}>3 Juri (Awal — Pilih 4–10)</option>
-                  )}
-                  {JURUS_JUDGE_COUNT_OPTIONS.map((cnt) => (
-                    <option key={cnt} value={cnt}>
-                      {cnt} Juri
-                    </option>
-                  ))}
-                </select>
-              </>
+              <span className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/50 text-xs font-mono font-semibold text-yellow-300 flex items-center">
+                {selectedMatch.roundDurationSec}s (TGRS · {selectedJurusJudgeCount} Juri)
+              </span>
             ) : (
               <select
                 aria-label={`Jumlah Babak ${selectedMatch.matchNumber}`}

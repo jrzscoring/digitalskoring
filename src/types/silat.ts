@@ -62,6 +62,7 @@ export interface JurusJudgeCornerScore {
   attackScore: number; // Ganda / Tunggal Bebas: teknik serang bela dalam perseratus (0..30 => 0.00..0.30)
   harmonyScore: number; // Ganda / Tunggal Bebas: kemantapan/kekompakan/kreativitas dalam perseratus (0..30 => 0.00..0.30)
   soulScore: number; // Ganda / Tunggal Bebas: penghayatan/jiwa/stamina dalam perseratus (0..30 => 0.00..0.30)
+  ready?: boolean; // Tunggal Baku / Regu: status READY juri sebelum menginput nilai (reset saat match direset)
   submitted: boolean;
 }
 

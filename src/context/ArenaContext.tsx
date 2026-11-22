@@ -25,6 +25,9 @@ import {
   clearAllOfflineStorage,
   clonePayload,
   enqueueFirestoreOp,
+  enqueueIndexedDbSyncBatch,
+  enqueueIndexedDbSyncItem,
+  getIndexedDbSyncQueueCount,
   getPendingFirestoreOps,
   isBrowserOnline,
   isOfflineNetworkError,
@@ -38,6 +41,7 @@ import {
   safeWriteLocalPayload,
   saveFirestoreSnapshotBackup,
   saveRtdbLocalBackup,
+  type NewQueuedSyncEntry,
   type PendingFirestoreOp,
 } from '../utils/offlineSync';
 import type {
@@ -587,6 +591,7 @@ interface ArenaContextValue {
     component: 'attackScore' | 'harmonyScore' | 'soulScore',
     valueHundredths: number
   ) => Promise<void>;
+  setJurusJudgeReady: (judgeId: JurusJudgeId, corner: Corner) => Promise<void>;
   toggleJurusJudgeSubmit: (judgeId: JurusJudgeId, corner: Corner) => Promise<void>;
   triggerJurusDewanPenalty: (
     corner: Corner,
@@ -610,6 +615,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const [localStore, setLocalStore] = useState<LocalStorePayload>(() => loadLocalStore(joinedArenaId));
   const localStoreRef = useRef<LocalStorePayload>(localStore);
   const [pendingOpsCount, setPendingOpsCount] = useState<number>(0);
+  const pendingOpsCountRef = useRef<number>(0);
 
   const channelRef = useRef<BroadcastChannel | null>(null);
   const gongFiredForRoundRef = useRef<string | null>(null);
@@ -621,10 +627,14 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const pendingJudgeUndoKeysRef = useRef<Set<string>>(new Set());
   const rtdbArenaId = joinedArenaId || localStore.arena.id || 'gelanggang-a';
 
-  // Keep synchronous ref aligned with localStore
+  // Keep synchronous refs aligned with state
   useEffect(() => {
     localStoreRef.current = localStore;
   }, [localStore]);
+
+  useEffect(() => {
+    pendingOpsCountRef.current = pendingOpsCount;
+  }, [pendingOpsCount]);
 
   // Auth listener
   useEffect(() => {
@@ -734,6 +744,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     isOnline,
     syncError,
     setSyncError,
+    flushRtdbBackup,
     retrySyncNow,
   } = useFirestoreSync({
     user,
@@ -766,21 +777,49 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       if (rtdb && !(user && cloudArena)) {
         const targetId = joinedArenaId || next.arena.id || 'gelanggang-a';
         const backupRecord = saveRtdbLocalBackup(targetId, next, true);
-        if (isBrowserOnline() && rtdbConnected) {
-          set(ref(rtdb, `silat_arenas/${targetId}`), sanitizeForRtdb(next))
-            .then(() => {
-              markRtdbBackupSynced(targetId, backupRecord.lastUpdatedAtMs);
-              setSyncError(null);
-            })
-            .catch((err) => {
-              if (!isOfflineNetworkError(err)) {
-                setSyncError(`Gagal menulis ke Firebase RTDB: ${err?.message || 'Unknown error'}`);
+        const sanitizedPayload = sanitizeForRtdb(next);
+
+        const queueToIndexedDb = (errorMsg?: string) => {
+          pendingOpsCountRef.current += 1;
+          setPendingOpsCount(pendingOpsCountRef.current);
+          void enqueueIndexedDbSyncItem({
+            arenaId: targetId,
+            backend: 'rtdb',
+            kind: 'score_update',
+            rtdbPath: `silat_arenas/${targetId}`,
+            rtdbPayload: sanitizedPayload,
+            ...(errorMsg ? { lastError: errorMsg } : {}),
+          }).then(() => {
+            void getIndexedDbSyncQueueCount(targetId, 'rtdb').then((idbCount) => {
+              pendingOpsCountRef.current = idbCount;
+              setPendingOpsCount(idbCount);
+              if (idbCount > 0 && isBrowserOnline() && rtdbConnected) {
+                void flushRtdbBackup(targetId);
               }
             });
+          });
+        };
+
+        if (!isBrowserOnline() || !rtdbConnected || pendingOpsCountRef.current > 0) {
+          queueToIndexedDb();
+          return;
         }
+
+        set(ref(rtdb, `silat_arenas/${targetId}`), sanitizedPayload)
+          .then(() => {
+            markRtdbBackupSynced(targetId, backupRecord.lastUpdatedAtMs);
+            setSyncError(null);
+          })
+          .catch((err) => {
+            if (isOfflineNetworkError(err)) {
+              queueToIndexedDb(err instanceof Error ? err.message : 'Network offline');
+            } else {
+              setSyncError(`Gagal menulis ke Firebase RTDB: ${err?.message || 'Unknown error'}`);
+            }
+          });
       }
     },
-    [persistLocalMirror, user, cloudArena, joinedArenaId, rtdbConnected, setSyncError]
+    [persistLocalMirror, user, cloudArena, joinedArenaId, rtdbConnected, flushRtdbBackup, setSyncError]
   );
 
   type QueuedOpInput = Omit<PendingFirestoreOp, 'id' | 'createdAtMs'>;
@@ -795,14 +834,42 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       if (ops.length === 0) return nextLocal;
 
       const queueRemaining = (startIndex: number) => {
+        const remainingInputs = ops.slice(startIndex);
         let updatedOps: PendingFirestoreOp[] = [];
-        for (let i = startIndex; i < ops.length; i += 1) {
-          updatedOps = enqueueFirestoreOp(arenaId, ops[i], nextLocal);
+        for (const op of remainingInputs) {
+          updatedOps = enqueueFirestoreOp(arenaId, op, nextLocal);
         }
-        setPendingOpsCount(updatedOps.length);
+        const baseTs = Date.now();
+        const idbItems: NewQueuedSyncEntry[] = remainingInputs.map((op, idx) => ({
+          arenaId,
+          backend: 'firestore',
+          kind: 'score_update',
+          firestoreOp: {
+            ...op,
+            id: `fop-${baseTs}-${startIndex + idx}-${Math.random().toString(36).slice(2, 6)}`,
+            createdAtMs: baseTs + idx,
+          },
+        }));
+        const optimisticCount = Math.max(
+          pendingOpsCountRef.current + remainingInputs.length,
+          updatedOps.length
+        );
+        pendingOpsCountRef.current = optimisticCount;
+        setPendingOpsCount(optimisticCount);
+        void enqueueIndexedDbSyncBatch(idbItems).then(() => {
+          void getIndexedDbSyncQueueCount(arenaId, 'firestore').then((idbCount) => {
+            const resolvedCount = Math.max(idbCount, getPendingFirestoreOps(arenaId).length);
+            pendingOpsCountRef.current = resolvedCount;
+            setPendingOpsCount(resolvedCount);
+          });
+        });
       };
 
-      if (!isBrowserOnline() || getPendingFirestoreOps(arenaId).length > 0) {
+      if (
+        !isBrowserOnline() ||
+        pendingOpsCountRef.current > 0 ||
+        getPendingFirestoreOps(arenaId).length > 0
+      ) {
         queueRemaining(0);
         return nextLocal;
       }
@@ -1810,6 +1877,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     pendingJudgeUndoKeysRef.current.clear();
 
     await clearAllOfflineStorage(LOCAL_STORAGE_KEY);
+    pendingOpsCountRef.current = 0;
+    setPendingOpsCount(0);
 
     if (mode === 'firebase' && cloudArena) {
       const athleteIds = new Set<string>(athletes.map((a) => a.id).filter(Boolean));
@@ -3070,15 +3139,39 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       if (activeMatch.status === 'finished' && activeMatch.winner !== 'draw') {
         return;
       }
-      const remaining = getRemainingTimerMs(activeMatch, Date.now());
+      const nowMs = Date.now();
+      const remaining = getRemainingTimerMs(activeMatch, nowMs);
       const patch: Partial<MatchData> = {
         status: 'finished',
         timerRemainingMs: remaining,
         timerStartedAtMs: 0,
         winner,
         winMethod: clampStr(winMethod, 64, 'Menang Angka'),
-        finishedAtMs: Date.now(),
+        finishedAtMs: nowMs,
       };
+      if (isJurusMatch(activeMatch)) {
+        const jState = ensureJurusState(activeMatch);
+        const jurusType = getJurusType(activeMatch);
+        const jurusJudgeCount = getJurusJudgeCount(activeMatch);
+        const performer: Corner = activeMatch.activePerformerCorner || 'blue';
+        const runningSegMs =
+          activeMatch.status === 'active' && activeMatch.timerStartedAtMs > 0
+            ? Math.max(0, nowMs - activeMatch.timerStartedAtMs)
+            : 0;
+        const nextState: JurusMatchState = {
+          ...jState,
+          [performer]: {
+            ...jState[performer],
+            recordedElapsedMs: Math.min(600000, jState[performer].recordedElapsedMs + runningSegMs),
+            completed: true,
+          },
+        };
+        const blueSummary = computeCornerJurusSummary(jurusType, nextState.blue, jurusJudgeCount);
+        const redSummary = computeCornerJurusSummary(jurusType, nextState.red, jurusJudgeCount);
+        patch.jurusState = nextState;
+        patch.blueScore = blueSummary.finalScore;
+        patch.redScore = redSummary.finalScore;
+      }
       playArenaGong();
 
       const buildWinnerPayload = (prev: LocalStorePayload): LocalStorePayload => {
@@ -3566,16 +3659,48 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const setActivePerformerCorner = useCallback(
     async (corner: Corner) => {
       if (activeMatch.status === 'finished') return;
+      const nowMs = Date.now();
+      const prevCorner: Corner = activeMatch.activePerformerCorner || 'blue';
       const jState = ensureJurusState(activeMatch);
       const jurusType = getJurusType(activeMatch);
       const jurusJudgeCount = getJurusJudgeCount(activeMatch);
-      const summary = computeCornerJurusSummary(jurusType, jState[corner], jurusJudgeCount);
+
+      let nextState = jState;
+      const extraTimerPatch: Partial<MatchData> = {};
+
+      if (prevCorner !== corner) {
+        const runningSegMs =
+          activeMatch.status === 'active' && activeMatch.timerStartedAtMs > 0
+            ? Math.max(0, nowMs - activeMatch.timerStartedAtMs)
+            : 0;
+        const prevAccumulatedMs = Math.min(
+          600000,
+          jState[prevCorner].recordedElapsedMs + runningSegMs
+        );
+        nextState = {
+          ...jState,
+          [prevCorner]: {
+            ...jState[prevCorner],
+            recordedElapsedMs: prevAccumulatedMs,
+            completed: true,
+          },
+        };
+        if (activeMatch.status === 'active' || activeMatch.status === 'paused') {
+          extraTimerPatch.status = 'waiting';
+          extraTimerPatch.timerRemainingMs = activeMatch.roundDurationSec * 1000;
+          extraTimerPatch.timerStartedAtMs = 0;
+        }
+        gongFiredForRoundRef.current = null;
+      }
+
+      const blueSummary = computeCornerJurusSummary(jurusType, nextState.blue, jurusJudgeCount);
+      const redSummary = computeCornerJurusSummary(jurusType, nextState.red, jurusJudgeCount);
       const patch: Partial<MatchData> = {
+        ...extraTimerPatch,
         activePerformerCorner: corner,
-        jurusState: jState,
-        ...(corner === 'blue'
-          ? { blueScore: summary.finalScore }
-          : { redScore: summary.finalScore }),
+        jurusState: nextState,
+        blueScore: blueSummary.finalScore,
+        redScore: redSummary.finalScore,
       };
       await commitJurusPatch(patch);
     },
@@ -3686,6 +3811,20 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       }));
     },
     [updateJudgeCornerScore]
+  );
+
+  const setJurusJudgeReady = useCallback(
+    async (judgeId: JurusJudgeId, corner: Corner) => {
+      if (activeMatch.status === 'finished') return;
+      const jState = ensureJurusState(activeMatch);
+      const prevJudgeScore = getJurusJudgeScore(jState[corner], judgeId);
+      if (prevJudgeScore.ready || prevJudgeScore.submitted) return;
+      await updateJudgeCornerScore(judgeId, corner, (prev) => ({
+        ...prev,
+        ready: true,
+      }));
+    },
+    [activeMatch, updateJudgeCornerScore]
   );
 
   const toggleJurusJudgeSubmit = useCallback(
@@ -4618,6 +4757,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     recordJurusWrongMove,
     setJurusStaminaScore,
     setJurusCreativeScore,
+    setJurusJudgeReady,
     toggleJurusJudgeSubmit,
     triggerJurusDewanPenalty,
     recordJurusElapsedAndSwitch,

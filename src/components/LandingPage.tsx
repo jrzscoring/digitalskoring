@@ -23,6 +23,7 @@ import monitorLogo from '../assets/monitor1-logo.png';
 import sekretarisLogo from '../assets/sekretaris1-logo.png';
 import timerLogo from '../assets/timer1-logo.png';
 import { useArena } from '../context/ArenaContext';
+import { useFullscreenState } from '../hooks/useAutoFullscreen';
 import type { AppView } from '../types/silat';
 import {
   buildArenaArchiveFile,
@@ -84,9 +85,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
     importArenaBackup,
   } = useArena();
 
-  const [isFullscreen, setIsFullscreen] = useState(() =>
-    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
-  );
+  const { isFullscreen, toggleFullscreen } = useFullscreenState();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('umum');
 
@@ -108,13 +107,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
   const [confirmResetSystem, setConfirmResetSystem] = useState(false);
   const [isResettingSystem, setIsResettingSystem] = useState(false);
 
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
+
 
   useEffect(() => {
     setArenaName(arena.name);
@@ -134,17 +127,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [showSettingsModal]);
 
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      } else {
-        await document.exitFullscreen();
-      }
-    } catch {
-      // ignore fullscreen denial in sandbox/headless environments
-    }
-  };
+
 
   const handleToggleSound = () => {
     const nextMuted = !soundMuted;
