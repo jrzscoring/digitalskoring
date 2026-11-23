@@ -91,7 +91,9 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          // Disabled in dev because registerDevSW calls import.meta.hot.send on load,
+          // which throws SendBeforeConnectError when Vite HMR is disabled or not yet connected.
+          enabled: false,
           type: 'module',
         },
       }),
