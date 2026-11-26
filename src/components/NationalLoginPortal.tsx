@@ -98,7 +98,7 @@ export function NationalLoginPortal() {
           >
             <LogIn className="w-4 h-4 shrink-0" />
             <span>
-              {authLoading ? 'Menghubungkan Google...' : 'Masuk dengan Akun Google'}
+              {authLoading ? 'Memproses Login...' : 'Login'}
             </span>
           </button>
         </section>

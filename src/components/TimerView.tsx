@@ -24,6 +24,7 @@ import {
   isJurusMatch,
 } from '../utils/ipsiRules';
 import { playArenaGong } from '../utils/soundEffects';
+import { LandscapeOrientationGuard } from './LandscapeOrientationGuard';
 import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface TimerViewProps {
@@ -165,6 +166,13 @@ export function TimerView({ onNavigate }: TimerViewProps) {
       setShowScoreSummary(false);
     }
   }, [showBreakBanner]);
+
+  const orientationGuardNode = (
+    <LandscapeOrientationGuard
+      panelLabel="Panel Timer"
+      onBack={() => onNavigate('landing')}
+    />
+  );
 
   if (isJurus) {
     const activePerformer: Corner = activeMatch.activePerformerCorner || 'blue';
@@ -382,6 +390,7 @@ export function TimerView({ onNavigate }: TimerViewProps) {
             </div>
           </section>
         </main>
+        {orientationGuardNode}
       </div>
     );
   }
@@ -1059,6 +1068,7 @@ export function TimerView({ onNavigate }: TimerViewProps) {
           </div>
         );
       })()}
+      {orientationGuardNode}
     </div>
   );
 }

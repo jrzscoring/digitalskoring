@@ -385,7 +385,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
             <LogIn className="w-4 h-4 text-yellow-300 shrink-0" />
             <div className="min-w-0 leading-tight">
               <div className="text-xs font-bold text-white truncate">
-                {authLoading ? 'Menghubungkan Google...' : 'Masuk Akun Google'}
+                {authLoading ? 'Memproses Login...' : 'Login'}
               </div>
               <div className="text-[11px] text-blue-200/85 truncate">
                 Mode Firestore Event Terpisah
@@ -660,9 +660,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
                       >
                         <LogIn className="w-4 h-4 shrink-0" />
                         <span>
-                          {authLoading
-                            ? 'Menghubungkan Akun Google...'
-                            : 'Masuk dengan Akun Google (Mode Firestore)'}
+                          {authLoading ? 'Memproses Login...' : 'Login'}
                         </span>
                       </button>
                       {authError && (

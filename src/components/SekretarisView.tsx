@@ -1160,7 +1160,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     className="min-h-[38px] px-4 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-55 text-black text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors"
                   >
                     <LogIn className="w-3.5 h-3.5 shrink-0" />
-                    <span>{authLoading ? 'Menghubungkan Google...' : 'Masuk Akun Google (Mode Firestore)'}</span>
+                    <span>{authLoading ? 'Memproses Login...' : 'Login'}</span>
                   </button>
                 ) : (
                   <button

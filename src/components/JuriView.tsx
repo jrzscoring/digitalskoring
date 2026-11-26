@@ -22,6 +22,7 @@ import {
   isJurusMatch,
   isTunggalOrRegu,
 } from '../utils/ipsiRules';
+import { LandscapeOrientationGuard } from './LandscapeOrientationGuard';
 import { TournamentIdentityBanner } from './TournamentIdentityBanner';
 
 interface JuriViewProps {
@@ -126,6 +127,13 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     setShowUnlockModal(false);
   };
 
+  const orientationGuardNode = (
+    <LandscapeOrientationGuard
+      panelLabel="Panel Juri"
+      onBack={() => onNavigate('landing')}
+    />
+  );
+
   const unlockModalNode = showUnlockModal ? (
     <div
       role="dialog"
@@ -216,29 +224,29 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     const selectionIds: JurusJudgeId[] = isJurus ? jurusJudgeIds : ([1, 2, 3] as JurusJudgeId[]);
     const gridClass =
       selectionIds.length <= 3
-        ? 'max-w-3xl grid-cols-1 sm:grid-cols-3'
+        ? 'max-w-3xl grid-cols-3'
         : selectionIds.length === 4
-        ? 'max-w-4xl grid-cols-2 sm:grid-cols-4'
+        ? 'max-w-4xl grid-cols-4'
         : selectionIds.length <= 6
-        ? 'max-w-4xl grid-cols-2 sm:grid-cols-3'
+        ? 'max-w-4xl grid-cols-3 grid-rows-2'
         : selectionIds.length <= 8
-        ? 'max-w-5xl grid-cols-2 sm:grid-cols-4'
-        : 'max-w-5xl grid-cols-2 sm:grid-cols-5';
+        ? 'max-w-5xl grid-cols-4 grid-rows-2'
+        : 'max-w-5xl grid-cols-5 grid-rows-2';
     const cardHeightClass =
       selectionIds.length > 4
-        ? 'min-h-[145px] sm:min-h-[175px] p-4 sm:p-5'
-        : 'min-h-[190px] sm:min-h-[220px] p-6';
+        ? 'h-full min-h-[76px] p-2 sm:p-4 gap-1.5 sm:gap-2.5'
+        : 'h-full min-h-[92px] p-3 sm:p-5 gap-2 sm:gap-3.5';
 
     return (
-      <div className="min-h-[100dvh] w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
-        <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col gap-6">
+      <div className="h-[100dvh] w-full overflow-hidden bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
+        <main className="flex-1 min-h-0 max-w-5xl w-full mx-auto px-3 sm:px-6 py-2 sm:py-3 flex flex-col gap-2 sm:gap-4">
           <div className="shrink-0 flex items-center justify-between gap-2">
             <button
               type="button"
               data-fullscreen-ignore="true"
               onClick={() => onNavigate('landing')}
               aria-label="Kembali ke Menu Utama"
-              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
+              className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
             >
               <ArrowLeft className="w-4 h-4 text-yellow-300 shrink-0" />
               <span>Kembali</span>
@@ -248,7 +256,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               data-fullscreen-ignore="true"
               onClick={() => void toggleFullscreen()}
               aria-label={isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}
-              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
+              className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-lg border border-blue-500/45 bg-blue-950/75 hover:bg-blue-900/85 hover:border-yellow-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap opacity-10 hover:opacity-100 focus-visible:opacity-100 transition-all"
             >
               {isFullscreen ? (
                 <Minimize2 className="w-4 h-4 text-yellow-300 shrink-0" />
@@ -261,10 +269,10 @@ export function JuriView({ onNavigate }: JuriViewProps) {
 
           <section
             data-testid="juri-selection-screen"
-            className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-7 py-4"
+            className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2.5 sm:gap-5 py-1"
           >
-            <div className="text-center space-y-2">
-              <h1 className="font-display text-2xl sm:text-4xl font-extrabold uppercase tracking-wide text-white">
+            <div className="shrink-0 text-center space-y-1.5 sm:space-y-2 w-full">
+              <h1 className="font-display text-lg sm:text-3xl lg:text-4xl font-extrabold uppercase tracking-wide text-white leading-tight">
                 Pilih Juri yang Bertugas
               </h1>
               {isFullJuriUnlocked ? (
@@ -278,20 +286,20 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               ) : (
                 <div
                   data-testid="juri-restricted-banner"
-                  className="max-w-2xl mx-auto rounded-2xl bg-[#0d051c]/90 border border-amber-400/55 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-left"
+                  className="max-w-2xl mx-auto rounded-xl sm:rounded-2xl bg-[#0d051c]/90 border border-amber-400/55 px-3 py-2 flex flex-row items-center justify-between gap-2.5 text-left"
                 >
-                  <div className="flex items-start gap-2.5 text-xs sm:text-sm text-amber-100">
-                    <Lock className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
-                    <span>
+                  <div className="flex items-center gap-2 text-[11px] sm:text-xs text-amber-100 min-w-0">
+                    <Lock className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                    <span className="line-clamp-2">
                       <strong className="text-white">Mode Terbatas:</strong> Hanya{' '}
-                      <strong className="text-yellow-300">Juri 1</strong> yang aktif. Masukkan password login melalui Panel Juri untuk membuka fitur penuh seluruh Juri.
+                      <strong className="text-yellow-300">Juri 1</strong> yang aktif. Masukkan password login untuk membuka seluruh Juri.
                     </span>
                   </div>
                   <button
                     type="button"
                     data-testid="juri-open-unlock-modal-btn"
                     onClick={openUnlockModal}
-                    className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                    className="min-h-[32px] px-3 py-1 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-black text-[11px] sm:text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                   >
                     <Unlock className="w-3.5 h-3.5 shrink-0" />
                     <span>Buka Semua Juri</span>
@@ -300,7 +308,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               )}
             </div>
 
-            <div className={`w-full grid gap-4 sm:gap-5 ${gridClass}`}>
+            <div className={`w-full flex-1 min-h-0 max-h-[340px] grid gap-2.5 sm:gap-4 items-stretch ${gridClass}`}>
               {selectionIds.map((jid) => {
                 const isRestrictedJudge = !isFullJuriUnlocked && jid > 1;
                 return (
@@ -320,35 +328,37 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                         setSelectedJudgeId(jid);
                       }
                     }}
-                    className={`group rounded-3xl border-2 transition-all duration-150 flex flex-col items-center justify-center gap-3 sm:gap-4 shadow-xl shadow-black/60 cursor-pointer ${cardHeightClass} ${
+                    className={`group rounded-2xl sm:rounded-3xl border-2 transition-all duration-150 flex flex-col items-center justify-center shadow-xl shadow-black/60 cursor-pointer ${cardHeightClass} ${
                       isRestrictedJudge
                         ? 'bg-black/60 border-amber-500/35 hover:border-yellow-400/75 opacity-75 hover:opacity-100'
                         : 'bg-gradient-to-b from-blue-950/85 via-[#130829]/95 to-black/95 border-blue-500/45 hover:border-yellow-400 hover:from-blue-900/90 hover:to-[#230847]/95 active:scale-[0.98]'
                     }`}
                   >
-                    <div className="relative">
+                    <div className="relative flex items-center justify-center">
                       <img
                         src={juriLogo}
                         alt={`Logo Juri ${jid}`}
                         className={`${
-                          selectionIds.length > 4 ? 'w-14 h-14 sm:w-16 sm:h-16' : 'w-20 h-20'
+                          selectionIds.length > 4
+                            ? 'w-10 h-10 sm:w-14 sm:h-14'
+                            : 'w-12 h-12 sm:w-16 sm:h-16 lg:w-20 lg:h-20'
                         } object-contain select-none transition-transform duration-150 ${
                           isRestrictedJudge ? 'grayscale group-hover:grayscale-0' : 'group-hover:scale-110'
                         }`}
                       />
                     </div>
-                    <div className="text-center space-y-1">
+                    <div className="text-center space-y-0.5">
                       <div
-                        className={`font-display text-xl sm:text-2xl font-extrabold tracking-wide transition-colors ${
+                        className={`font-display text-base sm:text-xl lg:text-2xl font-extrabold tracking-wide transition-colors ${
                           isRestrictedJudge ? 'text-slate-200 group-hover:text-yellow-300' : 'text-white group-hover:text-yellow-300'
                         }`}
                       >
                         Juri {jid}
                       </div>
                       {isRestrictedJudge && (
-                        <div className="text-[11px] font-semibold text-amber-300/90 flex items-center justify-center gap-1">
+                        <div className="text-[10px] sm:text-[11px] font-semibold text-amber-300/90 flex items-center justify-center gap-1">
                           <Lock className="w-3 h-3 shrink-0" />
-                          <span>Terkunci · Login Password</span>
+                          <span>Terkunci · Password</span>
                         </div>
                       )}
                     </div>
@@ -359,6 +369,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           </section>
         </main>
         {unlockModalNode}
+        {orientationGuardNode}
       </div>
     );
   }
@@ -398,59 +409,61 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     ];
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
-        <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-3 sm:py-4 flex flex-col gap-3.5 justify-between">
-          <TournamentIdentityBanner
-            arena={arena}
-            match={activeMatch}
-            compact
-            onBack={() => onNavigate('landing')}
-            showFullscreen
-            leftBadge={
-              <div className="flex items-center gap-2">
-                <div
-                  data-testid="active-judge-badge"
-                  className="px-3 sm:px-3.5 py-1.5 rounded-xl bg-yellow-400 text-black font-display text-xs sm:text-sm font-extrabold uppercase tracking-wider whitespace-nowrap shadow-md"
-                >
-                  Juri {judgeId}
-                </div>
-                {!isFullJuriUnlocked && (
-                  <button
-                    type="button"
-                    data-testid="juri-active-unlock-btn"
-                    onClick={openUnlockModal}
-                    className="min-h-[32px] px-2.5 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-[11px] font-bold text-amber-200 flex items-center gap-1 whitespace-nowrap cursor-pointer"
+      <div className="h-[100dvh] w-full overflow-hidden bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col">
+        <main className="flex-1 min-h-0 max-w-6xl w-full mx-auto px-3 sm:px-5 py-1.5 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2.5 justify-between">
+          <div className="shrink-0">
+            <TournamentIdentityBanner
+              arena={arena}
+              match={activeMatch}
+              compact
+              onBack={() => onNavigate('landing')}
+              showFullscreen
+              leftBadge={
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <div
+                    data-testid="active-judge-badge"
+                    className="px-2.5 sm:px-3.5 py-1 rounded-xl bg-yellow-400 text-black font-display text-xs sm:text-sm font-extrabold uppercase tracking-wider whitespace-nowrap shadow-md"
                   >
-                    <Unlock className="w-3 h-3 shrink-0" />
-                    <span>Buka Semua Juri</span>
-                  </button>
-                )}
-              </div>
-            }
-            rightBadge={
-              <div
-                data-testid="jurus-performer-clock"
-                className="text-center px-3 sm:px-3.5 py-1 rounded-xl bg-black/65 border border-yellow-400/45 shrink-0"
-              >
-                <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-yellow-200 leading-none">
-                  Waktu Penampil
+                    Juri {judgeId}
+                  </div>
+                  {!isFullJuriUnlocked && (
+                    <button
+                      type="button"
+                      data-testid="juri-active-unlock-btn"
+                      onClick={openUnlockModal}
+                      className="min-h-[30px] px-2 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-[10px] sm:text-[11px] font-bold text-amber-200 flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                    >
+                      <Unlock className="w-3 h-3 shrink-0" />
+                      <span className="hidden sm:inline">Buka Semua Juri</span>
+                    </button>
+                  )}
                 </div>
-                <div className="font-mono text-base sm:text-xl font-extrabold tabular-nums text-yellow-300 leading-tight">
-                  {formatJurusElapsedMs(cornerElapsedMs)}
+              }
+              rightBadge={
+                <div
+                  data-testid="jurus-performer-clock"
+                  className="text-center px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-xl bg-black/65 border border-yellow-400/45 shrink-0"
+                >
+                  <div className="text-[8px] sm:text-[10px] uppercase tracking-wider text-yellow-200 leading-none">
+                    Waktu Penampil
+                  </div>
+                  <div className="font-mono text-sm sm:text-lg font-extrabold tabular-nums text-yellow-300 leading-tight">
+                    {formatJurusElapsedMs(cornerElapsedMs)}
+                  </div>
                 </div>
-              </div>
-            }
-          />
+              }
+            />
+          </div>
 
           {/* Main Scoring Pad */}
           {isTruthCategory ? (
-            <div className="flex-1 flex flex-col gap-3.5 justify-between">
+            <div className="flex-1 min-h-0 flex flex-col gap-1.5 sm:gap-2.5 justify-between">
               {/* Status + Undo Strip & 2 Large International Scoring Pads (Left: Kesalahan Gerak, Right: READY) */}
-              <section className="flex-1 rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-4 sm:p-5 flex flex-col gap-4 shadow-2xl">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              <section className="flex-1 min-h-0 rounded-2xl sm:rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-2 sm:p-3.5 flex flex-col gap-1.5 sm:gap-2.5 shadow-2xl">
+                <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
                   <span
                     data-testid="jurus-ready-status"
-                    className={`text-xs sm:text-sm font-extrabold uppercase tracking-wider ${
+                    className={`text-[11px] sm:text-sm font-extrabold uppercase tracking-wider ${
                       isLocked
                         ? 'text-slate-300'
                         : isReady
@@ -466,31 +479,31 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                     data-testid="jurus-undo-wrong-move-btn"
                     disabled={!canScoreTruth || myScore.wrongMoves <= 0}
                     onClick={() => void recordJurusWrongMove(judgeId, effectiveCorner, -1)}
-                    className="min-h-[44px] px-4 py-2 rounded-xl bg-blue-950/90 hover:bg-blue-900 border border-blue-400/60 disabled:opacity-35 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                    className="min-h-[34px] sm:min-h-[40px] px-3 sm:px-4 py-1 rounded-xl bg-blue-950/90 hover:bg-blue-900 border border-blue-400/60 disabled:opacity-35 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
                   >
-                    <RotateCcw className="w-4 h-4 text-yellow-300" />
+                    <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-300" />
                     <span>Batal</span>
                     <span className="font-mono text-yellow-300">+0.01</span>
                   </button>
                 </div>
 
                 {/* 2 Big Buttons: Left = Kesalahan Gerak (-0.01), Right = READY */}
-                <div className="flex-1 grid grid-cols-2 gap-3.5 sm:gap-5">
+                <div className="flex-1 min-h-0 grid grid-cols-2 gap-2.5 sm:gap-4">
                   <button
                     type="button"
                     data-testid="jurus-wrong-move-btn"
                     disabled={!canScoreTruth}
                     onClick={() => void recordJurusWrongMove(judgeId, effectiveCorner, 1)}
-                    className={`min-h-[215px] sm:min-h-[270px] lg:min-h-[310px] rounded-2xl border-2 p-4 sm:p-6 flex flex-col items-center justify-center gap-2 text-center transition-all select-none touch-manipulation ${
+                    className={`h-full min-h-[70px] rounded-xl sm:rounded-2xl border-2 p-2 sm:p-4 flex flex-col items-center justify-center gap-1 sm:gap-2 text-center transition-all select-none touch-manipulation ${
                       canScoreTruth
                         ? 'bg-gradient-to-b from-red-600 via-red-700 to-red-900 hover:from-red-500 hover:to-red-800 active:scale-[0.98] border-red-300/85 text-white cursor-pointer shadow-xl shadow-red-950/60'
                         : 'bg-red-950/35 border-red-800/45 text-white/45 opacity-55 cursor-not-allowed'
                     }`}
                   >
-                    <span className="font-display text-2xl sm:text-4xl font-black uppercase tracking-tight">
+                    <span className="font-display text-[clamp(0.95rem,2.5vw,2.1rem)] font-black uppercase tracking-tight leading-tight">
                       Kesalahan Gerak
                     </span>
-                    <span className="font-mono text-4xl sm:text-5xl font-black tabular-nums text-yellow-300">
+                    <span className="font-mono text-[clamp(1.5rem,min(5vw,7dvh),3.1rem)] font-black tabular-nums text-yellow-300 leading-none">
                       -0.01
                     </span>
                   </button>
@@ -501,24 +514,24 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                     aria-pressed={isReady}
                     disabled={isReady || isLocked}
                     onClick={handlePressReady}
-                    className={`min-h-[215px] sm:min-h-[270px] lg:min-h-[310px] rounded-2xl border-2 p-4 sm:p-6 flex flex-col items-center justify-center gap-2.5 text-center transition-all select-none touch-manipulation ${
+                    className={`h-full min-h-[70px] rounded-xl sm:rounded-2xl border-2 p-2 sm:p-4 flex flex-col items-center justify-center gap-1 sm:gap-2 text-center transition-all select-none touch-manipulation ${
                       isReady || isLocked
                         ? 'bg-slate-700/80 border-slate-500/70 text-slate-300 opacity-75 cursor-not-allowed shadow-none'
                         : 'bg-gradient-to-b from-amber-400 via-amber-500 to-amber-600 hover:from-amber-300 hover:to-amber-500 active:scale-[0.98] border-yellow-200 text-slate-950 cursor-pointer shadow-xl shadow-amber-950/50'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-1.5 sm:gap-2.5">
                       <CheckCircle2
-                        className={`w-7 h-7 sm:w-9 sm:h-9 ${
+                        className={`w-[clamp(1.25rem,3.5dvh,2.25rem)] h-[clamp(1.25rem,3.5dvh,2.25rem)] ${
                           isReady || isLocked ? 'text-slate-300' : 'text-slate-950'
                         }`}
                       />
-                      <span className="font-display text-3xl sm:text-5xl font-black uppercase tracking-wider">
+                      <span className="font-display text-[clamp(1.25rem,min(4.5vw,6dvh),2.85rem)] font-black uppercase tracking-wider leading-none">
                         READY
                       </span>
                     </div>
                     <span
-                      className={`text-sm sm:text-base font-extrabold uppercase tracking-wider ${
+                      className={`text-[clamp(0.6875rem,1.8dvh,0.95rem)] font-extrabold uppercase tracking-wider leading-tight ${
                         isReady || isLocked ? 'text-slate-300' : 'text-slate-900'
                       }`}
                     >
@@ -535,21 +548,21 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               {/* Below Both Big Buttons: Kemantapan Gerak / Penghayatan / Stamina (0.00 - 0.10) */}
               <section
                 data-testid="jurus-stamina-section"
-                className="rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-4 sm:p-5 flex flex-col gap-3"
+                className="shrink-0 rounded-2xl sm:rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-2 sm:p-3 flex flex-col gap-1.5"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs sm:text-sm font-bold uppercase tracking-wider text-yellow-300">
+                  <div className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-yellow-300">
                     Kemantapan Gerak / Penghayatan / Stamina
                   </div>
-                  <div className="text-right flex items-baseline gap-2">
-                    <span className="text-xs text-blue-200">Skor Kemantapan:</span>
-                    <span className="font-mono text-2xl sm:text-3xl font-extrabold tabular-nums text-yellow-300">
+                  <div className="text-right flex items-baseline gap-1.5">
+                    <span className="text-[11px] sm:text-xs text-blue-200">Skor Kemantapan:</span>
+                    <span className="font-mono text-lg sm:text-2xl font-extrabold tabular-nums text-yellow-300 leading-none">
                       +{formatJurusScore(myScore.staminaScore)}
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-11 gap-2">
+                <div className="grid grid-cols-6 sm:grid-cols-11 gap-1 sm:gap-1.5">
                   {STAMINA_OPTIONS.map((val) => {
                     const active = myScore.staminaScore === val;
                     return (
@@ -559,7 +572,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                         data-testid={`jurus-stamina-btn-${val}`}
                         disabled={!canScoreTruth}
                         onClick={() => void setJurusStaminaScore(judgeId, effectiveCorner, val)}
-                        className={`min-h-[52px] rounded-xl border font-mono text-sm sm:text-base font-extrabold tabular-nums transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
+                        className={`min-h-[32px] sm:min-h-[40px] rounded-lg sm:rounded-xl border font-mono text-[11px] sm:text-sm font-extrabold tabular-nums transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
                           active
                             ? 'bg-yellow-400 border-yellow-200 text-black shadow-md'
                             : 'bg-black/65 border-purple-600/60 text-white hover:bg-purple-900/80 hover:border-yellow-400/70'
@@ -574,33 +587,35 @@ export function JuriView({ onNavigate }: JuriViewProps) {
             </div>
           ) : (
             /* Ganda / Tunggal Bebas (Base 9.10 + Attack + Harmony + Soul, masing-masing 0.00 - 0.30) */
-            <section className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <section className="flex-1 min-h-0 grid grid-cols-3 gap-2 sm:gap-3.5">
               {creativeFields.map((field) => {
                 const value = myScore[field.key];
                 return (
                   <div
                     key={field.key}
-                    className="rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-4 sm:p-5 flex flex-col justify-between gap-3"
+                    className="h-full min-h-0 rounded-2xl sm:rounded-3xl bg-[#0d051c]/90 border-2 border-purple-600/70 p-2.5 sm:p-3.5 flex flex-col justify-between gap-1.5 sm:gap-2"
                   >
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-wider text-yellow-300">
+                    <div className="min-w-0">
+                      <div className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-yellow-300 leading-tight line-clamp-2">
                         {field.label}
                       </div>
-                      <div className="text-[11px] text-blue-200 mt-0.5">{field.hint}</div>
+                      <div className="text-[10px] sm:text-[11px] text-blue-200 mt-0.5 leading-tight line-clamp-2 hidden sm:block">
+                        {field.hint}
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2 bg-black/60 rounded-2xl p-3 border border-purple-700/60">
+                    <div className="flex items-center justify-between gap-1.5 sm:gap-2 bg-black/60 rounded-xl sm:rounded-2xl p-1.5 sm:p-2.5 border border-purple-700/60">
                       <button
                         type="button"
                         disabled={isLocked || value <= 0}
                         onClick={() => void setJurusCreativeScore(judgeId, effectiveCorner, field.key, value - 1)}
-                        className="w-11 h-11 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-400/50 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                        className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-400/50 disabled:opacity-40 flex items-center justify-center cursor-pointer shrink-0"
                         aria-label={`Kurangi ${field.label}`}
                       >
-                        <Minus className="w-5 h-5" />
+                        <Minus className="w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
 
-                      <div className="font-mono text-4xl font-black tabular-nums text-yellow-300">
+                      <div className="font-mono text-2xl sm:text-3xl lg:text-4xl font-black tabular-nums text-yellow-300 leading-none">
                         +{formatJurusScore(value)}
                       </div>
 
@@ -608,10 +623,10 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                         type="button"
                         disabled={isLocked || value >= 30}
                         onClick={() => void setJurusCreativeScore(judgeId, effectiveCorner, field.key, value + 1)}
-                        className="w-11 h-11 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-400/50 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                        className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-400/50 disabled:opacity-40 flex items-center justify-center cursor-pointer shrink-0"
                         aria-label={`Tambah ${field.label}`}
                       >
-                        <Plus className="w-5 h-5" />
+                        <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
                     </div>
 
@@ -628,14 +643,14 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                       className="w-full accent-yellow-400 cursor-pointer disabled:opacity-40"
                     />
 
-                    <div className="grid grid-cols-5 gap-1.5">
+                    <div className="grid grid-cols-5 gap-1">
                       {CREATIVE_PRESETS.map((preset) => (
                         <button
                           key={preset}
                           type="button"
                           disabled={isLocked}
                           onClick={() => void setJurusCreativeScore(judgeId, effectiveCorner, field.key, preset)}
-                          className={`min-h-[36px] rounded-lg border font-mono text-xs font-bold cursor-pointer disabled:opacity-40 ${
+                          className={`min-h-[28px] sm:min-h-[34px] rounded-lg border font-mono text-[10px] sm:text-xs font-bold cursor-pointer disabled:opacity-40 ${
                             value === preset
                               ? 'bg-yellow-400 border-yellow-200 text-black'
                               : 'bg-black/65 border-purple-700/60 text-blue-100 hover:border-yellow-400/60'
@@ -652,15 +667,15 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           )}
 
           {/* Bottom Jurus Total & Lock Bar */}
-          <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm">
-              <div>
-                <span className="text-blue-200">Total Nilai Juri {judgeId}: </span>
-                <span className="font-mono text-2xl font-black text-yellow-300 tabular-nums">
+          <section className="shrink-0 rounded-xl sm:rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 px-3 py-2 sm:px-3.5 sm:py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs sm:text-sm">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-blue-200">Total Nilai Juri {judgeId}:</span>
+                <span className="font-mono text-lg sm:text-2xl font-black text-yellow-300 tabular-nums leading-none">
                   {formatJurusScore(myTotal)}
                 </span>
               </div>
-              <div className="text-blue-200 font-mono">
+              <div className="text-blue-200 font-mono text-[11px] sm:text-xs">
                 Median: <span className="text-white font-bold">{formatJurusScore(cornerSummary.median)}</span> &middot; Akhir Sudut:{' '}
                 <span className="text-emerald-300 font-bold">{formatJurusScore(cornerSummary.finalScore)}</span>
               </div>
@@ -670,13 +685,13 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               type="button"
               disabled={isFinished || (isTruthCategory && !isReady && !myScore.submitted)}
               onClick={() => void toggleJurusJudgeSubmit(judgeId, effectiveCorner)}
-              className={`w-full sm:w-auto min-h-[46px] px-5 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`min-h-[36px] sm:min-h-[42px] px-3.5 sm:px-5 py-1.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 myScore.submitted
                   ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
                   : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950'
               }`}
             >
-              {myScore.submitted ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              {myScore.submitted ? <Unlock className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Lock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
               <span>
                 {myScore.submitted
                   ? `Terkunci · Buka Kunci Nilai Juri ${judgeId}`
@@ -686,6 +701,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           </section>
         </main>
         {unlockModalNode}
+        {orientationGuardNode}
       </div>
     );
   }
@@ -743,8 +759,8 @@ export function JuriView({ onNavigate }: JuriViewProps) {
   };
 
   return (
-    <div className="min-h-[100dvh] w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col select-none">
-      <main className="flex-1 w-full px-3 sm:px-5 lg:px-6 py-3 sm:py-4 flex flex-col gap-3 sm:gap-4">
+    <div className="h-[100dvh] w-full overflow-hidden bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col select-none">
+      <main className="flex-1 min-h-0 w-full px-2.5 sm:px-5 lg:px-6 py-1.5 sm:py-2.5 flex flex-col gap-1.5 sm:gap-2.5">
         <div className="shrink-0">
           <TournamentIdentityBanner
             arena={arena}
@@ -755,11 +771,11 @@ export function JuriView({ onNavigate }: JuriViewProps) {
         </div>
 
         {/* Top Judge Identity & Match Clock Strip */}
-        <section className="shrink-0 rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 px-3.5 py-2.5 sm:px-5 sm:py-3 flex flex-wrap items-center justify-between gap-2.5">
+        <section className="shrink-0 rounded-xl sm:rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 px-3 py-1.5 sm:px-5 sm:py-2 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div
               data-testid="active-judge-badge"
-              className="px-4 py-1.5 sm:py-2 rounded-xl bg-yellow-400 text-black font-display text-sm sm:text-lg font-extrabold uppercase tracking-wider flex items-center gap-2 shrink-0"
+              className="px-3 sm:px-4 py-1 sm:py-1.5 rounded-xl bg-yellow-400 text-black font-display text-xs sm:text-base font-extrabold uppercase tracking-wider flex items-center gap-2 shrink-0"
             >
               <span>Juri {judgeId}</span>
             </div>
@@ -768,7 +784,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
                 type="button"
                 data-testid="juri-active-unlock-btn"
                 onClick={openUnlockModal}
-                className="min-h-[34px] px-2.5 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-xs font-bold text-amber-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                className="min-h-[30px] sm:min-h-[34px] px-2.5 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-[11px] sm:text-xs font-bold text-amber-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
                 <Unlock className="w-3.5 h-3.5 shrink-0" />
                 <span>Buka Semua Juri</span>
@@ -776,27 +792,27 @@ export function JuriView({ onNavigate }: JuriViewProps) {
             )}
           </div>
 
-          <div className="flex items-center gap-2.5 sm:gap-3.5">
+          <div className="flex items-center gap-2 sm:gap-3.5">
             <span className="text-xs sm:text-sm font-bold text-yellow-300 uppercase">
               Babak {activeMatch.currentRound}
             </span>
-            <span className="font-mono text-xl sm:text-2xl font-extrabold tabular-nums text-white">
+            <span className="font-mono text-lg sm:text-2xl font-extrabold tabular-nums text-white leading-none">
               {formatMatchTime(liveTimerMs)}
             </span>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
               {([1, 2, 3] as JudgeId[]).map(renderVoteBadge)}
             </div>
           </div>
         </section>
 
         {/* Ergonomic 2-Column Thumb Pads (Blue Left, Red Right) */}
-        <section className="relative flex-1 min-h-[300px] grid grid-cols-2 gap-3 sm:gap-5">
+        <section className="relative flex-1 min-h-0 grid grid-cols-2 gap-2.5 sm:gap-4">
           {/* Non-shifting Live Consensus Feedback Overlay */}
           {feedback && (
-            <div className="pointer-events-none absolute top-2.5 left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-xl">
+            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-xl">
               <div
                 role="status"
-                className={`w-full px-4 py-2 rounded-xl border text-center text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-xl backdrop-blur-md ${
+                className={`w-full px-3.5 py-1.5 rounded-xl border text-center text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-xl backdrop-blur-md ${
                   feedback.tone === 'awarded'
                     ? 'bg-blue-950/95 border-yellow-400 text-yellow-300'
                     : 'bg-[#17092e]/95 border-blue-400/70 text-blue-100'
@@ -811,12 +827,12 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           {isJuriLocked && (
             <div
               data-testid="juri-locked-overlay"
-              className="absolute inset-0 z-20 rounded-3xl bg-[#090315]/90 backdrop-blur-sm border-2 border-pink-500/75 flex flex-col items-center justify-center text-center p-6 gap-3 shadow-[0_0_40px_rgba(236,72,153,0.25)]"
+              className="absolute inset-0 z-20 rounded-2xl sm:rounded-3xl bg-[#090315]/90 backdrop-blur-sm border-2 border-pink-500/75 flex flex-col items-center justify-center text-center p-4 sm:p-6 gap-2 sm:gap-3 shadow-[0_0_40px_rgba(236,72,153,0.25)]"
             >
-              <div className="w-14 h-14 rounded-2xl bg-pink-600/20 border border-pink-400/70 flex items-center justify-center">
-                <Lock className="w-7 h-7 text-pink-400" />
+              <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-pink-600/20 border border-pink-400/70 flex items-center justify-center">
+                <Lock className="w-6 h-6 sm:w-7 sm:h-7 text-pink-400" />
               </div>
-              <div className="font-display text-xl sm:text-2xl font-extrabold uppercase tracking-wider text-white">
+              <div className="font-display text-lg sm:text-2xl font-extrabold uppercase tracking-wider text-white">
                 Panel Juri Terkunci
               </div>
               <p className="max-w-md text-xs sm:text-sm text-purple-200 leading-relaxed">
@@ -828,7 +844,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           {/* Sudut Biru Pad (Hanya Tombol Pukulan & Tendangan) */}
           <div
             data-testid="juri-blue-pad"
-            className="rounded-3xl bg-gradient-to-b from-blue-600 via-blue-700 to-blue-900 border-2 border-blue-300/80 p-3 sm:p-4 lg:p-5 grid grid-rows-2 gap-3 sm:gap-4 h-full"
+            className="rounded-2xl sm:rounded-3xl bg-gradient-to-b from-blue-600 via-blue-700 to-blue-900 border-2 border-blue-300/80 p-2 sm:p-3.5 lg:p-4 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 sm:gap-3 h-full min-h-0"
           >
             <button
               type="button"
@@ -836,12 +852,12 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               data-testid="juri-blue-pukulan-btn"
               disabled={isFinished || isJuriLocked}
               onClick={() => void handleVote('blue', 1)}
-              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-blue-500 hover:bg-blue-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
+              className="h-full min-h-0 w-full p-2 sm:p-4 rounded-xl sm:rounded-2xl bg-blue-500 hover:bg-blue-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
             >
               <img
                 src={pukulanIcon}
                 alt="Pukulan"
-                className="max-h-[72%] max-w-[78%] h-[clamp(4.25rem,min(17vw,18dvh),9.5rem)] w-auto object-contain pointer-events-none select-none"
+                className="max-h-[80%] max-w-[78%] h-full w-auto object-contain pointer-events-none select-none"
               />
             </button>
 
@@ -851,12 +867,12 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               data-testid="juri-blue-tendangan-btn"
               disabled={isFinished || isJuriLocked}
               onClick={() => void handleVote('blue', 2)}
-              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-blue-800/95 hover:bg-blue-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
+              className="h-full min-h-0 w-full p-2 sm:p-4 rounded-xl sm:rounded-2xl bg-blue-800/95 hover:bg-blue-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-blue-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-blue-950/60"
             >
               <img
                 src={tendanganIcon}
                 alt="Tendangan"
-                className="max-h-[78%] max-w-[78%] h-[clamp(4.75rem,min(19vw,21dvh),10.5rem)] w-auto object-contain pointer-events-none select-none"
+                className="max-h-[84%] max-w-[78%] h-full w-auto object-contain pointer-events-none select-none"
               />
             </button>
           </div>
@@ -864,7 +880,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           {/* Sudut Merah Pad (Hanya Tombol Pukulan & Tendangan) */}
           <div
             data-testid="juri-red-pad"
-            className="rounded-3xl bg-gradient-to-b from-red-600 via-red-700 to-red-900 border-2 border-red-300/80 p-3 sm:p-4 lg:p-5 grid grid-rows-2 gap-3 sm:gap-4 h-full"
+            className="rounded-2xl sm:rounded-3xl bg-gradient-to-b from-red-600 via-red-700 to-red-900 border-2 border-red-300/80 p-2 sm:p-3.5 lg:p-4 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 sm:gap-3 h-full min-h-0"
           >
             <button
               type="button"
@@ -872,12 +888,12 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               data-testid="juri-red-pukulan-btn"
               disabled={isFinished || isJuriLocked}
               onClick={() => void handleVote('red', 1)}
-              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-red-500 hover:bg-red-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
+              className="h-full min-h-0 w-full p-2 sm:p-4 rounded-xl sm:rounded-2xl bg-red-500 hover:bg-red-400 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-200/75 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
             >
               <img
                 src={pukulanIcon}
                 alt="Pukulan"
-                className="max-h-[72%] max-w-[78%] h-[clamp(4.25rem,min(17vw,18dvh),9.5rem)] w-auto object-contain pointer-events-none select-none"
+                className="max-h-[80%] max-w-[78%] h-full w-auto object-contain pointer-events-none select-none"
               />
             </button>
 
@@ -887,19 +903,19 @@ export function JuriView({ onNavigate }: JuriViewProps) {
               data-testid="juri-red-tendangan-btn"
               disabled={isFinished || isJuriLocked}
               onClick={() => void handleVote('red', 2)}
-              className="h-full w-full min-h-[120px] p-3 sm:p-5 rounded-2xl bg-red-800/95 hover:bg-red-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
+              className="h-full min-h-0 w-full p-2 sm:p-4 rounded-xl sm:rounded-2xl bg-red-800/95 hover:bg-red-700 active:scale-[0.97] active:brightness-110 disabled:opacity-40 border-2 border-red-300/65 flex items-center justify-center transition-all duration-75 cursor-pointer touch-manipulation select-none shadow-lg shadow-red-950/60"
             >
               <img
                 src={tendanganIcon}
                 alt="Tendangan"
-                className="max-h-[78%] max-w-[78%] h-[clamp(4.75rem,min(19vw,21dvh),10.5rem)] w-auto object-contain pointer-events-none select-none"
+                className="max-h-[84%] max-w-[78%] h-full w-auto object-contain pointer-events-none select-none"
               />
             </button>
           </div>
         </section>
 
         {/* Bottom Clear Vote / Current Score Summary */}
-        <section className="shrink-0 flex items-center justify-between gap-2 pt-2 border-t border-purple-800/60 text-xs sm:text-sm text-blue-200">
+        <section className="shrink-0 flex items-center justify-between gap-2 pt-1.5 border-t border-purple-800/60 text-xs sm:text-sm text-blue-200">
           <div className="font-mono tabular-nums whitespace-nowrap">
             Skor: <span className="text-blue-300 font-bold">Biru {activeMatch.blueScore}</span> &ndash;{' '}
             <span className="text-red-300 font-bold">{activeMatch.redScore} Merah</span>
@@ -908,7 +924,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
             type="button"
             disabled={isFinished || isJuriLocked || !myVote || myVote.corner === 'none'}
             onClick={() => void clearJudgeVote(judgeId)}
-            className="min-h-[40px] px-3.5 py-1.5 rounded-lg bg-blue-950/80 border border-blue-500/45 hover:bg-blue-900 hover:border-yellow-400 active:scale-[0.97] disabled:opacity-40 text-white font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer touch-manipulation transition-all duration-75"
+            className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-lg bg-blue-950/80 border border-blue-500/45 hover:bg-blue-900 hover:border-yellow-400 active:scale-[0.97] disabled:opacity-40 text-white font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer touch-manipulation transition-all duration-75"
           >
             <RotateCcw className="w-3.5 h-3.5 text-yellow-300" />
             <span>Hapus Vote J{judgeId}</span>
@@ -922,9 +938,9 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           role="dialog"
           aria-modal="true"
           aria-label={`Verifikasi Juri ${judgeId}`}
-          className="fixed inset-0 z-50 bg-[#050814]/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 gap-3"
+          className="fixed inset-0 z-50 bg-[#050814]/90 backdrop-blur-sm flex flex-col items-center justify-center p-3 sm:p-4 gap-3 overflow-y-auto"
         >
-          <div className="max-w-xl w-full rounded-2xl bg-gradient-to-b from-[#071538] via-[#050d24] to-[#04091a] border-2 border-amber-400/85 shadow-[0_0_40px_rgba(251,191,36,0.25)] p-6 sm:p-7 flex flex-col items-center text-center gap-3.5">
+          <div className="max-w-xl w-full rounded-2xl bg-gradient-to-b from-[#071538] via-[#050d24] to-[#04091a] border-2 border-amber-400/85 shadow-[0_0_40px_rgba(251,191,36,0.25)] p-4 sm:p-6 flex flex-col items-center text-center gap-2.5 sm:gap-3.5">
             <div className="w-14 h-14 rounded-full bg-[#091533] border border-amber-400/70 flex items-center justify-center shadow-[0_0_20px_rgba(251,191,36,0.2)]">
               <Shield className="w-7 h-7 text-amber-400" />
             </div>
@@ -1009,6 +1025,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
         </div>
       )}
       {unlockModalNode}
+      {orientationGuardNode}
     </div>
   );
 }
