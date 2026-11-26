@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArenaProvider } from './context/ArenaContext';
+import { ArenaProvider, useArena } from './context/ArenaContext';
 import { LandingPage } from './components/LandingPage';
+import { NationalLoginPortal } from './components/NationalLoginPortal';
 import { SekretarisView } from './components/SekretarisView';
 import { DewanView } from './components/DewanView';
 import { TimerView } from './components/TimerView';
@@ -33,10 +34,13 @@ function parseViewFromLocation(): AppView {
   return 'landing';
 }
 
-export default function App() {
+function AppContent() {
+  const { user, authReady } = useArena();
   const [view, setView] = useState<AppView>(() => parseViewFromLocation());
 
-  useAutoFullscreen(shouldAutoFullscreenView(view));
+  const hasEnteredPortal = authReady && Boolean(user);
+
+  useAutoFullscreen(hasEnteredPortal && shouldAutoFullscreenView(view));
 
   useEffect(() => {
     const onHashChange = () => {
@@ -58,8 +62,30 @@ export default function App() {
     }
   };
 
+  if (!authReady) {
+    return (
+      <div
+        data-testid="auth-loading-screen"
+        className="min-h-screen w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex items-center justify-center p-6 select-none"
+      >
+        <div className="rounded-2xl bg-[#0e0620]/85 border border-purple-500/40 px-6 py-4 text-xs sm:text-sm font-semibold text-blue-100 shadow-xl">
+          Memeriksa sesi Akun Google...
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasEnteredPortal) {
+    return (
+      <>
+        <NationalLoginPortal />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
   return (
-    <ArenaProvider>
+    <>
       {view === 'landing' && <LandingPage onSelectView={navigate} />}
       {view === 'sekretaris' && <SekretarisView onNavigate={navigate} />}
       {view === 'dewan' && <DewanView onNavigate={navigate} />}
@@ -67,6 +93,14 @@ export default function App() {
       {view === 'juri' && <JuriView onNavigate={navigate} />}
       {view === 'scoreboard' && <ScoreboardView onNavigate={navigate} />}
       <OfflineIndicator />
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <ArenaProvider>
+      <AppContent />
     </ArenaProvider>
   );
 }

@@ -30,6 +30,7 @@
         "matchNumber": { "type": "string", "minLength": 1, "maxLength": 32 },
         "weightClass": { "type": "string", "minLength": 1, "maxLength": 80 },
         "stage": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "gelanggang": { "type": "string", "enum": ["A", "B", "C", "D"] },
         "competitionCategory": { "type": "string", "enum": ["Tanding", "Jurus"] },
         "jurusType": { "type": "string", "enum": ["Tunggal Baku", "Ganda", "Regu", "Tunggal Bebas"] },
         "jurusJudgeCount": { "type": "integer", "minimum": 3, "maximum": 10 },
@@ -65,6 +66,8 @@
         "redTeguran1": { "type": "integer" },
         "redTeguran2": { "type": "integer" },
         "redPeringatan": { "type": "integer" },
+        "blueProtests": { "type": "integer" },
+        "redProtests": { "type": "integer" },
         "judge1Vote": { "type": "object", "properties": {} },
         "judge2Vote": { "type": "object", "properties": {} },
         "judge3Vote": { "type": "object", "properties": {} },
@@ -113,9 +116,53 @@
         "arenaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "role": { "type": "string", "enum": ["Sekretaris", "Dewan", "Timer", "Juri", "Scoreboard"] },
+        "displayName": { "type": "string", "maxLength": 80 },
+        "email": { "type": "string", "maxLength": 160 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "arenaId", "ownerId", "role", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Profil resmi petugas pertandingan Pencak Silat yang terautentikasi (PII terisolasi per pemilik/admin).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 160 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "licenseNumber": { "type": "string", "maxLength": 48 },
+        "contingentOrigin": { "type": "string", "maxLength": 80 },
+        "preferredRole": { "type": "string", "enum": ["Sekretaris", "Dewan", "Timer", "Juri", "Scoreboard"] },
+        "preferredCourt": { "type": "string", "enum": ["A", "B", "C", "D"] },
+        "preferredJudgeNumber": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "lastArenaId": { "type": "string", "maxLength": 64 },
+        "onboardingCompleted": { "type": "boolean" },
+        "lastLoginAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "displayName", "email", "preferredRole", "preferredCourt",
+        "onboardingCompleted", "lastLoginAt", "createdAt", "updatedAt"
+      ]
+    },
+    "LoginAuditEntry": {
+      "title": "LoginAuditEntry",
+      "description": "Riwayat sesi masuk resmi petugas kejuaraan untuk jejak audit.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 160 },
+        "deviceLabel": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "stationRole": { "type": "string", "enum": ["Sekretaris", "Dewan", "Timer", "Juri", "Scoreboard"] },
+        "court": { "type": "string", "enum": ["A", "B", "C", "D"] },
+        "arenaId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "loginAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "email", "deviceLabel", "stationRole", "court", "arenaId", "loginAtMs", "createdAt"]
     },
     "Athlete": {
       "title": "Athlete",
@@ -179,6 +226,14 @@
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Profil resmi petugas pertandingan dan preferensi penugasan gelanggang."
+    },
+    "/users/{userId}/loginLogs/{logId}": {
+      "schema": { "$ref": "#/entities/LoginAuditEntry" },
+      "description": "Riwayat sesi masuk petugas untuk jejak audit."
+    },
     "/arenas/{arenaId}": {
       "schema": { "$ref": "#/entities/Arena" },
       "description": "Dokumen Gelanggang dan penunjuk partai aktif."

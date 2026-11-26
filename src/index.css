@@ -15,6 +15,10 @@
     background-attachment: fixed;
     color: #ffffff;
   }
+
+  input, textarea {
+    caret-color: auto;
+  }
 }
 
 .tabular-nums {
@@ -26,3 +30,18 @@
   padding: 0.375rem 0.625rem !important;
 }
 
+@keyframes portal-marquee-seamless {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-portal-marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: portal-marquee-seamless 36s linear infinite;
+}

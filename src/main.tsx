@@ -7,6 +7,7 @@ const ACTIVE_STORAGE_PREFIXES = [
   'silat_ipsi2026_',
   'silat_offline_backup_v1_',
   'silat_offline_sync_lock_v1_',
+  'silat_portal_access_mode_v1',
   'firebase:',
 ];
 

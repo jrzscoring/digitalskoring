@@ -2,14 +2,21 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from '
 import {
   AlertTriangle,
   Archive,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   FileDown,
+  KeyRound,
+  Link2,
+  LogIn,
+  LogOut,
   Maximize2,
   Minimize2,
   RotateCcw,
   Search,
   Settings,
+  ShieldCheck,
   Trophy,
   Upload,
   Volume2,
@@ -24,16 +31,24 @@ import sekretarisLogo from '../assets/sekretaris1-logo.png';
 import timerLogo from '../assets/timer1-logo.png';
 import { useArena } from '../context/ArenaContext';
 import { useFullscreenState } from '../hooks/useAutoFullscreen';
-import type { AppView } from '../types/silat';
+import type { AppView, ArenaCourt } from '../types/silat';
 import {
   buildArenaArchiveFile,
   downloadArenaArchiveFile,
   parseArenaArchiveFile,
   type ArenaArchiveFile,
 } from '../utils/archiveBackup';
+import {
+  buildEventShareUrl,
+  readAcknowledgedLimitedNoticeUid,
+  resolveCourtForArenaId,
+  shouldShowLimitedModeNotice,
+  writeAcknowledgedLimitedNoticeUid,
+} from '../utils/authSession';
 import { formatMatchScore } from '../utils/ipsiRules';
 import { exportArenaSummaryPdf, exportMatchPdf } from '../utils/pdfExport';
 import { isSoundMuted, playArenaGong, setSoundMuted } from '../utils/soundEffects';
+import { AccountSessionModal } from './AccountSessionModal';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface LandingPageProps {
@@ -52,11 +67,11 @@ const MENU_ITEMS: {
   { id: 'scoreboard', label: 'Scoreboard', logoSrc: monitorLogo },
 ];
 
-const GELANGGANG_PRESETS = [
-  { id: 'gelanggang-a', label: 'Gelanggang A' },
-  { id: 'gelanggang-b', label: 'Gelanggang B' },
-  { id: 'gelanggang-c', label: 'Gelanggang C' },
-  { id: 'gelanggang-d', label: 'Gelanggang D' },
+const GELANGGANG_PRESETS: { id: string; court: ArenaCourt; label: string }[] = [
+  { id: 'gelanggang-a', court: 'A', label: 'Gelanggang A' },
+  { id: 'gelanggang-b', court: 'B', label: 'Gelanggang B' },
+  { id: 'gelanggang-c', court: 'C', label: 'Gelanggang C' },
+  { id: 'gelanggang-d', court: 'D', label: 'Gelanggang D' },
 ];
 
 const DURATION_PRESETS = [
@@ -71,6 +86,17 @@ type SettingsTab = 'umum' | 'backup' | 'reset';
 
 export function LandingPage({ onSelectView }: LandingPageProps) {
   const {
+    mode,
+    user,
+    userProfile,
+    authLoading,
+    authError,
+    clearAuthError,
+    signInGoogle,
+    signOutGoogle,
+    isSuperAdmin,
+    isFullJuriUnlocked,
+    logoutPortal,
     arena,
     matches,
     athletes,
@@ -87,7 +113,15 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
 
   const { isFullscreen, toggleFullscreen } = useFullscreenState();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('umum');
+  const [showLimitedNotice, setShowLimitedNotice] = useState(() =>
+    shouldShowLimitedModeNotice({
+      userUid: user?.uid,
+      isFullJuriUnlocked,
+      acknowledgedUid: readAcknowledgedLimitedNoticeUid(),
+    })
+  );
 
   const [arenaName, setArenaName] = useState(arena.name);
   const [tournamentName, setTournamentName] = useState(arena.tournamentName);
@@ -97,6 +131,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [switchingArenaId, setSwitchingArenaId] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<'arena' | 'link' | null>(null);
 
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [importedArchive, setImportedArchive] = useState<ArenaArchiveFile | null>(null);
@@ -129,6 +164,27 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
 
 
 
+  useEffect(() => {
+    setShowLimitedNotice(
+      shouldShowLimitedModeNotice({
+        userUid: user?.uid,
+        isFullJuriUnlocked,
+        acknowledgedUid: readAcknowledgedLimitedNoticeUid(),
+      })
+    );
+  }, [user?.uid, isFullJuriUnlocked]);
+
+  const handleAcknowledgeLimitedNotice = () => {
+    writeAcknowledgedLimitedNoticeUid(user?.uid || null);
+    setShowLimitedNotice(false);
+  };
+
+  useEffect(() => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }, []);
+
   const handleToggleSound = () => {
     const nextMuted = !soundMuted;
     setSoundMuted(nextMuted);
@@ -145,6 +201,18 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
       }
     } finally {
       setSwitchingArenaId(null);
+    }
+  };
+
+  const handleCopyArenaInfo = async (kind: 'arena' | 'link') => {
+    const text = kind === 'link' ? buildEventShareUrl(arena.id) : arena.id;
+    if (!text || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(kind);
+      window.setTimeout(() => setCopiedKey(null), 2000);
+    } catch {
+      // ignore clipboard errors
     }
   };
 
@@ -260,11 +328,91 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
   }, [importedArchive, archiveSearch]);
 
   return (
-    <main className="min-h-screen w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col items-center justify-center px-6 py-8 sm:py-10 relative overflow-hidden">
+    <main className="min-h-screen w-full bg-gradient-to-br from-black via-[#17092e] to-[#3b0764] text-white flex flex-col items-center justify-center px-6 py-8 sm:py-10 relative overflow-hidden select-none caret-transparent">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(147,51,234,0.22),transparent_58%),radial-gradient(ellipse_at_bottom_left,rgba(37,99,235,0.20),transparent_52%),radial-gradient(ellipse_at_bottom_right,rgba(250,204,21,0.12),transparent_52%)]"
       />
+
+      {/* Indikator Event Aktif & Akun Google (Header Kiri Atas) */}
+      <div
+        data-testid="landing-access-strip"
+        className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2 max-w-[calc(100vw-9.5rem)]"
+      >
+        {user ? (
+          <button
+            type="button"
+            data-testid="landing-account-button"
+            onClick={() => setShowAccountModal(true)}
+            className="min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0e0620]/85 hover:bg-[#190b36] backdrop-blur-md border border-emerald-400/45 hover:border-yellow-400/75 flex items-center gap-2.5 text-left cursor-pointer shadow-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
+          >
+            {user.photoURL ? (
+              <img
+                src={user.photoURL}
+                alt={userProfile?.displayName || user.displayName || 'Foto Petugas'}
+                referrerPolicy="no-referrer"
+                className="w-7 h-7 rounded-full object-cover border border-emerald-300/40 shrink-0"
+              />
+            ) : (
+              <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0" />
+            )}
+            <div className="min-w-0 leading-tight space-y-0.5">
+              <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-emerald-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <span>Event Aktif</span>
+                <span className="text-slate-400">&middot;</span>
+                <span className="text-yellow-300 truncate max-w-[160px] sm:max-w-[240px]">
+                  {arena.name}
+                </span>
+              </div>
+              <div className="text-[11px] font-semibold text-white truncate max-w-[220px] sm:max-w-[340px]">
+                {user.email || userProfile?.displayName || user.displayName}
+              </div>
+              <div className="text-[10px] text-blue-200/80 font-mono truncate max-w-[220px] sm:max-w-[340px]">
+                {mode === 'firebase' ? 'Firestore' : 'Lokal'} &middot; {arena.id}
+                {isSuperAdmin ? ' · Admin' : ''}
+              </div>
+            </div>
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="landing-google-login-button"
+            disabled={authLoading}
+            onClick={() => void signInGoogle()}
+            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/12 disabled:opacity-60 border border-white/15 hover:border-yellow-400/70 flex items-center gap-2 text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
+          >
+            <LogIn className="w-4 h-4 text-yellow-300 shrink-0" />
+            <div className="min-w-0 leading-tight">
+              <div className="text-xs font-bold text-white truncate">
+                {authLoading ? 'Menghubungkan Google...' : 'Masuk Akun Google'}
+              </div>
+              <div className="text-[11px] text-blue-200/85 truncate">
+                Mode Firestore Event Terpisah
+              </div>
+            </div>
+          </button>
+        )}
+      </div>
+
+      {authError && !showSettingsModal && (
+        <div
+          role="alert"
+          data-testid="landing-auth-error"
+          className="fixed top-16 left-4 z-30 max-w-sm rounded-xl bg-rose-950/95 border border-rose-400/70 px-3.5 py-2.5 text-xs text-rose-100 shadow-2xl flex items-start gap-2"
+        >
+          <AlertTriangle className="w-4 h-4 text-rose-300 shrink-0 mt-0.5" />
+          <span className="flex-1 leading-relaxed">{authError}</span>
+          <button
+            type="button"
+            onClick={clearAuthError}
+            aria-label="Tutup pesan error login"
+            className="p-0.5 text-rose-200 hover:text-white cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
         <PWAInstallButton />
@@ -420,14 +568,128 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
 
             {settingsTab === 'umum' && (
               <div className="space-y-4">
+                {/* Akun Google & Mode Cloud Firestore per Event */}
+                <section
+                  data-testid="settings-google-event-section"
+                  className="rounded-xl bg-black/55 border border-purple-600/50 p-3.5 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-yellow-300">
+                      Akun Google per Event (Mode Firestore)
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                        user
+                          ? 'bg-emerald-950/80 border-emerald-400/60 text-emerald-200'
+                          : 'bg-amber-950/80 border-amber-400/60 text-amber-200'
+                      }`}
+                    >
+                      {user ? 'Terisolasi per Akun' : 'Mode Bersama'}
+                    </span>
+                  </div>
+
+                  {user ? (
+                    <div className="space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="min-w-0">
+                          <div className="font-bold text-white truncate">
+                            {userProfile?.displayName || user.displayName || 'Panitia Event'}
+                          </div>
+                          <div className="text-[11px] text-blue-200 truncate">{user.email}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowSettingsModal(false);
+                              setShowAccountModal(true);
+                            }}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-blue-950/90 hover:bg-blue-900 border border-blue-400/50 text-[11px] font-semibold text-white cursor-pointer"
+                          >
+                            Profil &amp; Gabung Arena
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="settings-google-logout-button"
+                            onClick={() => void signOutGoogle()}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-800 border border-rose-500/50 text-[11px] font-semibold text-rose-100 cursor-pointer"
+                          >
+                            Keluar Google
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#0d051c] border border-white/10 px-3 py-2 text-xs">
+                        <div className="min-w-0">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                            ID Arena Event (Firestore)
+                          </div>
+                          <div className="font-mono font-bold text-emerald-300 truncate">{arena.id}</div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyArenaInfo('arena')}
+                            className="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-[11px] font-semibold text-yellow-300 flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedKey === 'arena' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedKey === 'arena' ? 'Disalin' : 'Salin ID'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyArenaInfo('link')}
+                            className="px-2.5 py-1 rounded-md bg-blue-900/80 hover:bg-blue-800 border border-blue-400/40 text-[11px] font-semibold text-white flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedKey === 'link' ? <Check className="w-3 h-3 text-emerald-300" /> : <Link2 className="w-3 h-3 text-yellow-300" />}
+                            <span>{copiedKey === 'link' ? 'Link Disalin' : 'Salin Link'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <p className="text-xs text-blue-200 leading-relaxed">
+                        Login dengan Akun Google khusus panitia event agar otomatis mendapatkan ID Arena Firestore sendiri (<span className="font-mono text-yellow-300">arena-&lt;uid&gt;</span>) sehingga data pertandingan antar event tidak saling bertabrakan.
+                      </p>
+                      <button
+                        type="button"
+                        data-testid="settings-google-login-button"
+                        disabled={authLoading}
+                        onClick={() => void signInGoogle()}
+                        className="w-full min-h-[40px] px-4 py-2 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-55 text-black text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <LogIn className="w-4 h-4 shrink-0" />
+                        <span>
+                          {authLoading
+                            ? 'Menghubungkan Akun Google...'
+                            : 'Masuk dengan Akun Google (Mode Firestore)'}
+                        </span>
+                      </button>
+                      {authError && (
+                        <div className="rounded-lg bg-rose-950/85 border border-rose-400/60 px-3 py-2 text-[11px] text-rose-100">
+                          {authError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+
                 {/* Pilihan Gelanggang */}
                 <section className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-blue-200">
-                    Pilih Gelanggang
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-blue-200">
+                      Pilih Gelanggang
+                    </div>
+                    <div className="text-[11px] text-blue-300/80">
+                      {user
+                        ? 'Terisolasi khusus untuk akun Google ini'
+                        : 'Jalur bersama publik'}
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {GELANGGANG_PRESETS.map((g) => {
-                      const active = arena.id === g.id;
+                      const activeCourt = resolveCourtForArenaId(arena.id, user?.uid);
+                      const active = activeCourt === g.court;
                       return (
                         <button
                           key={g.id}
@@ -604,6 +866,22 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
                       <span>{isFullscreen ? 'Keluar Full Screen' : 'Full Screen'}</span>
                     </button>
                   </div>
+                </section>
+
+                {/* Keluar Sesi Aplikasi */}
+                <section className="border-t border-purple-800/60 pt-4 flex items-center justify-end">
+                  <button
+                    type="button"
+                    data-testid="landing-logout-button"
+                    onClick={() => {
+                      setShowSettingsModal(false);
+                      void logoutPortal();
+                    }}
+                    className="min-h-[40px] px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center gap-2 whitespace-nowrap cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                  >
+                    <LogOut className="w-4 h-4 shrink-0" />
+                    <span>Keluar</span>
+                  </button>
                 </section>
               </div>
             )}
@@ -922,6 +1200,44 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
           </div>
         </div>
       )}
+      {showLimitedNotice && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="limited-mode-notice-title"
+          data-testid="limited-mode-password-notice-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-[#120726] border border-amber-400/60 p-6 shadow-2xl space-y-4 text-center">
+            <div className="mx-auto w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-400/50 flex items-center justify-center">
+              <KeyRound className="w-6 h-6 text-yellow-300" />
+            </div>
+            <div className="space-y-2">
+              <h2
+                id="limited-mode-notice-title"
+                className="font-display text-lg font-extrabold text-white"
+              >
+                Aktifkan Akses Penuh Juri
+              </h2>
+              <p className="text-xs sm:text-sm text-blue-100 leading-relaxed">
+                Aplikasi saat ini berjalan dalam <strong className="text-yellow-300">mode terbatas</strong> (hanya Juri 1 aktif). Silakan lakukan input password melalui <strong className="text-white">Panel Juri</strong> untuk membuka seluruh kursi Juri (1–3 Tanding &amp; 1–10 Jurus).
+              </p>
+              <p className="text-[11px] text-slate-300">
+                Hubungi WhatsApp 081379876424 untuk akses penuh aplikasi.
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="limited-mode-notice-ok-btn"
+              onClick={handleAcknowledgeLimitedNotice}
+              className="w-full min-h-[44px] px-5 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 active:scale-[0.99] text-black text-sm font-extrabold cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-300"
+            >
+              Oke
+            </button>
+          </div>
+        </div>
+      )}
+      <AccountSessionModal open={showAccountModal} onClose={() => setShowAccountModal(false)} />
     </main>
   );
 }

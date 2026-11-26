@@ -4,19 +4,26 @@ import {
   ArrowLeft,
   Award,
   CalendarDays,
+  Check,
   CheckCircle2,
   ChevronDown,
   ClipboardList,
+  Copy,
   FileDown,
   GitBranch,
   History,
   ImagePlus,
+  LayoutGrid,
+  Link2,
   ListChecks,
   Loader2,
+  LogIn,
   Maximize2,
   Minimize2,
   Search,
   Settings,
+  ShieldCheck,
+  Trash2,
   Trophy,
   UserPlus,
   Users,
@@ -24,7 +31,8 @@ import {
 } from 'lucide-react';
 import { useArena } from '../context/ArenaContext';
 import { useFullscreenState } from '../hooks/useAutoFullscreen';
-import type { AppView } from '../types/silat';
+import type { AppView, OfficialStationRole } from '../types/silat';
+import { buildEventShareUrl } from '../utils/authSession';
 import {
   JURUS_JUDGE_COUNT_OPTIONS,
   formatMatchScore,
@@ -38,12 +46,15 @@ import {
   BaganBracketPanel,
   InputAtletPanel,
   KontrolPartaiPanel,
+  PembagianGelanggangPanel,
 } from './RegistrasiDataPanels';
 import {
   JadwalPertandinganPanel,
   PerolehanMedaliPanel,
   RekapAtletPanel,
 } from './LaporanPanels';
+import { OfficialProtestPanel } from './OfficialProtestPanel';
+import { RoundScoreRecapChart } from './RoundScoreRecapChart';
 
 type SekretarisSection =
   | 'identitas'
@@ -51,6 +62,7 @@ type SekretarisSection =
   | 'input-atlet'
   | 'bagan-bracket'
   | 'kontrol-partai'
+  | 'bagi-gelanggang'
   | 'laporan-medali'
   | 'laporan-atlet'
   | 'laporan-jadwal';
@@ -98,15 +110,29 @@ function readAndResizeLogo(file: File): Promise<string> {
 
 export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const {
+    user,
+    authLoading,
+    authError,
+    signInGoogle,
     syncError,
     arena,
     matches,
     activeMatch,
+    operators,
     getMatchEvents,
     updateArenaMeta,
     setActiveMatch,
     setMatchJurusJudgeCount,
+    addOperatorUid,
+    removeOperatorUid,
   } = useArena();
+
+  const [operatorUidInput, setOperatorUidInput] = useState('');
+  const [operatorRoleInput, setOperatorRoleInput] = useState<OfficialStationRole>('Juri');
+  const [operatorNameInput, setOperatorNameInput] = useState('');
+  const [operatorFeedback, setOperatorFeedback] = useState<string | null>(null);
+  const [copiedArenaId, setCopiedArenaId] = useState(false);
+  const [copiedEventLink, setCopiedEventLink] = useState(false);
 
   const [tournamentName, setTournamentName] = useState(arena.tournamentName);
   const [venue, setVenue] = useState(arena.venue || '');
@@ -136,7 +162,8 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const isRegistrasiSection =
     activeSection === 'input-atlet' ||
     activeSection === 'bagan-bracket' ||
-    activeSection === 'kontrol-partai';
+    activeSection === 'kontrol-partai' ||
+    activeSection === 'bagi-gelanggang';
   const isLaporanSection =
     activeSection === 'laporan-medali' ||
     activeSection === 'laporan-atlet' ||
@@ -658,6 +685,23 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                     <ListChecks className="w-4 h-4 text-yellow-300 shrink-0" />
                     <span>Kontrol Partai</span>
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="sekretaris-menu-bagi-gelanggang"
+                    onClick={() => {
+                      setActiveSection('bagi-gelanggang');
+                      setRegistrasiMenuOpen(false);
+                    }}
+                    className={`w-full px-4 py-2.5 text-left text-sm flex items-center gap-2.5 cursor-pointer ${
+                      activeSection === 'bagi-gelanggang'
+                        ? 'bg-yellow-400/15 text-yellow-300 font-bold'
+                        : 'text-white hover:bg-blue-950 font-medium'
+                    }`}
+                  >
+                    <LayoutGrid className="w-4 h-4 text-yellow-300 shrink-0" />
+                    <span>Pembagian Gelanggang</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -705,6 +749,8 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
           <BaganBracketPanel />
         ) : activeSection === 'kontrol-partai' ? (
           <KontrolPartaiPanel />
+        ) : activeSection === 'bagi-gelanggang' ? (
+          <PembagianGelanggangPanel />
         ) : activeSection === 'laporan-medali' ? (
           <PerolehanMedaliPanel />
         ) : activeSection === 'laporan-atlet' ? (
@@ -1084,9 +1130,220 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               Setiap perubahan identitas maupun logo kejuaraan langsung tersimpan dan tersinkron otomatis ke seluruh panel.
             </p>
           </form>
+
+          {/* Kontrol Akses Perangkat & Operator Multi-Device */}
+          <section
+            data-testid="sekretaris-operator-access-panel"
+            className="lg:col-span-2 rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-5 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-purple-800/50 pb-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-yellow-300 shrink-0" />
+                  <h2 className="font-display text-xl font-bold text-yellow-300">
+                    Kontrol Akses Operator &amp; Multi-Perangkat
+                  </h2>
+                </div>
+                <p className="text-xs text-blue-200">
+                  {user
+                    ? `Akun Event Aktif: ${user.email || user.uid} — gunakan akun Google yang sama di perangkat lain atau bagikan Link/ID Arena & daftarkan UID Petugas.`
+                    : 'Login dengan Akun Google khusus event untuk memisahkan database Cloud Firestore per event agar tidak bertabrakan dengan event lain.'}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {!user ? (
+                  <button
+                    type="button"
+                    data-testid="sekretaris-google-login-button"
+                    disabled={authLoading}
+                    onClick={() => void signInGoogle()}
+                    className="min-h-[38px] px-4 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-55 text-black text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors"
+                  >
+                    <LogIn className="w-3.5 h-3.5 shrink-0" />
+                    <span>{authLoading ? 'Menghubungkan Google...' : 'Masuk Akun Google (Mode Firestore)'}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = buildEventShareUrl(arena.id);
+                      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                        void navigator.clipboard.writeText(url).then(() => {
+                          setCopiedEventLink(true);
+                          window.setTimeout(() => setCopiedEventLink(false), 2000);
+                        });
+                      }
+                    }}
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-400/50 text-xs font-semibold text-emerald-100 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {copiedEventLink ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                    ) : (
+                      <Link2 className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+                    )}
+                    <span>{copiedEventLink ? 'Link Event Disalin' : 'Salin Link Event'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                      void navigator.clipboard.writeText(arena.id).then(() => {
+                        setCopiedArenaId(true);
+                        window.setTimeout(() => setCopiedArenaId(false), 2000);
+                      });
+                    }
+                  }}
+                  className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-blue-950/85 hover:bg-blue-900 border border-blue-500/45 text-xs font-mono text-white flex items-center gap-2 cursor-pointer"
+                >
+                  {copiedArenaId ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+                  )}
+                  <span>ID Arena: {arena.id}</span>
+                </button>
+              </div>
+            </div>
+
+            {authError && !user && (
+              <div
+                role="alert"
+                className="rounded-lg bg-rose-950/85 border border-rose-400/60 px-3 py-2 text-xs text-rose-100 flex items-center gap-2"
+              >
+                <AlertCircle className="w-4 h-4 text-rose-300 shrink-0" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!operatorUidInput.trim()) return;
+                void addOperatorUid(
+                  operatorUidInput.trim(),
+                  operatorRoleInput,
+                  operatorNameInput.trim() || undefined
+                ).then((ok) => {
+                  if (ok) {
+                    setOperatorFeedback(
+                      `Operator "${operatorNameInput.trim() || operatorUidInput.trim()}" (${operatorRoleInput}) berhasil didaftarkan.`
+                    );
+                    setOperatorUidInput('');
+                    setOperatorNameInput('');
+                  }
+                });
+              }}
+              className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end"
+            >
+              <div className="sm:col-span-5">
+                <label htmlFor="op-uid-input" className="block text-xs font-medium text-blue-200 mb-1">
+                  UID Petugas (dari Profil Petugas)
+                </label>
+                <input
+                  id="op-uid-input"
+                  type="text"
+                  value={operatorUidInput}
+                  onChange={(e) => setOperatorUidInput(e.target.value)}
+                  placeholder="Tempel UID Firebase petugas..."
+                  maxLength={128}
+                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white font-mono text-xs focus:outline-none focus:border-yellow-400"
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <label htmlFor="op-name-input" className="block text-xs font-medium text-blue-200 mb-1">
+                  Nama Petugas (Opsional)
+                </label>
+                <input
+                  id="op-name-input"
+                  type="text"
+                  value={operatorNameInput}
+                  onChange={(e) => setOperatorNameInput(e.target.value)}
+                  placeholder="Contoh: Juri 1 Matras A"
+                  maxLength={80}
+                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="op-role-select" className="block text-xs font-medium text-blue-200 mb-1">
+                  Peran Tugas
+                </label>
+                <select
+                  id="op-role-select"
+                  value={operatorRoleInput}
+                  onChange={(e) => setOperatorRoleInput(e.target.value as OfficialStationRole)}
+                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400 cursor-pointer"
+                >
+                  <option value="Sekretaris">Sekretaris</option>
+                  <option value="Dewan">Dewan</option>
+                  <option value="Timer">Timer</option>
+                  <option value="Juri">Juri</option>
+                  <option value="Scoreboard">Scoreboard</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <button
+                  type="submit"
+                  disabled={!operatorUidInput.trim()}
+                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 text-black text-xs font-bold cursor-pointer"
+                >
+                  Daftarkan
+                </button>
+              </div>
+            </form>
+
+            {operatorFeedback && (
+              <div
+                role="status"
+                className="rounded-lg bg-emerald-950/85 border border-emerald-400/60 px-3 py-2 text-xs text-emerald-100 flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+                <span>{operatorFeedback}</span>
+              </div>
+            )}
+
+            {operators.length > 0 && (
+              <div className="overflow-x-auto rounded-xl border border-purple-800/50">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-black/55 text-blue-200 border-b border-purple-800/50">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Petugas</th>
+                      <th className="px-3 py-2 font-semibold">UID</th>
+                      <th className="px-3 py-2 font-semibold">Peran</th>
+                      <th className="px-3 py-2 font-semibold text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-purple-900/40">
+                    {operators.map((op) => (
+                      <tr key={op.uid} className="bg-black/30">
+                        <td className="px-3 py-2 font-medium text-white">
+                          {op.displayName || 'Petugas Terdaftar'}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-300">{op.uid}</td>
+                        <td className="px-3 py-2 text-yellow-300 font-semibold">{op.role}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => void removeOperatorUid(op.uid)}
+                            aria-label={`Hapus akses ${op.uid}`}
+                            className="p-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-800 border border-rose-500/40 text-rose-200 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </div>
         ) : (
-        <div className={`grid grid-cols-1 lg:grid-cols-2 items-start ${isFullscreen ? 'gap-3.5' : 'gap-5'}`}>
+        <div className={isFullscreen ? 'space-y-3.5' : 'space-y-5'}>
+          <OfficialProtestPanel />
+          <RoundScoreRecapChart />
+          <div className={`grid grid-cols-1 lg:grid-cols-2 items-start ${isFullscreen ? 'gap-3.5' : 'gap-5'}`}>
           {/* Kolom Kiri Halaman Awal: Daftar Partai Siap Bertanding & Kolom Kanan: Histori Hasil Tanding */}
           {/* Histori Hasil Tanding */}
           <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-4 space-y-2.5">
@@ -1302,6 +1559,9 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                           <span className="px-1.5 py-0.5 rounded bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 font-mono font-bold shrink-0">
                             {m.matchNumber}
                           </span>
+                          <span className="px-1.5 py-0.5 rounded bg-purple-900/75 border border-purple-500/45 text-yellow-200 font-mono font-bold shrink-0">
+                            Gel. {m.gelanggang || 'A'}
+                          </span>
                           <span
                             className={`px-1.5 py-0.5 rounded font-bold shrink-0 ${
                               isJurus
@@ -1348,6 +1608,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </div>
             )}
           </section>
+          </div>
         </div>
         )}
       </main>
@@ -1442,6 +1703,9 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                           <span className="font-mono text-blue-300 font-bold shrink-0">#{idx + 1}</span>
                           <span className="px-1.5 py-0.5 rounded bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 font-mono font-bold shrink-0">
                             {m.matchNumber}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-purple-900/75 border border-purple-500/45 text-yellow-200 font-mono font-bold shrink-0">
+                            Gel. {m.gelanggang || 'A'}
                           </span>
                           <span
                             className={`px-1.5 py-0.5 rounded font-bold text-[10px] shrink-0 ${

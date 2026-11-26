@@ -18,6 +18,11 @@ import {
 import { db, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from '../lib/firebase';
 import type { ArenaData, AthleteData, BracketMatchSlot, MatchData, MatchEvent } from '../types/silat';
 import {
+  getAccountArenaId,
+  isOwnAccountArenaId,
+  resolveCourtForArenaId,
+} from '../utils/authSession';
+import {
   acquireOfflineSyncLock,
   clearPendingFirestoreOps,
   enqueueIndexedDbSyncBatch,
@@ -432,7 +437,7 @@ export function useFirestoreSync({
 
   // 1. Firebase Realtime Database (window.firebaseConfig) real-time sync with IndexedDB queue backup
   useEffect(() => {
-    if (!rtdb || isFirestoreActive) {
+    if (!rtdb || isFirestoreActive || (authReady && user)) {
       setRtdbConnected(false);
       return;
     }
@@ -498,32 +503,35 @@ export function useFirestoreSync({
       unsubConn();
       unsubArena();
     };
-  }, [rtdbArenaId, isFirestoreActive, getSeedPayload, onRtdbSync, flushRtdbBackup, onPendingOpsCountChange]);
+  }, [rtdbArenaId, isFirestoreActive, authReady, user, getSeedPayload, onRtdbSync, flushRtdbBackup, onPendingOpsCountChange]);
 
   // Trigger RTDB flush automatically whenever browser comes back online while connected
   useEffect(() => {
-    if (!rtdb || isFirestoreActive || !isOnline || !rtdbConnected) return;
+    if (!rtdb || isFirestoreActive || (authReady && user) || !isOnline || !rtdbConnected) return;
     void getIndexedDbSyncQueueCount(rtdbArenaId, 'rtdb').then((count) => {
       hasPendingRtdbQueueRef.current = count > 0 || isRtdbBackupDirty(rtdbArenaId);
       if (hasPendingRtdbQueueRef.current) {
         void flushRtdbBackup(rtdbArenaId);
       }
     });
-  }, [isOnline, rtdbConnected, isFirestoreActive, rtdbArenaId, reconnectTick, flushRtdbBackup]);
+  }, [isOnline, rtdbConnected, isFirestoreActive, authReady, user, rtdbArenaId, reconnectTick, flushRtdbBackup]);
 
   // 2. Cloud Firestore arena & matches real-time subscription when authenticated (with offline backup fallback)
   useEffect(() => {
+    setCloudArena(null);
+    setCloudMatches([]);
+    setCloudEvents([]);
+    setCloudAthletes([]);
+    setCloudBrackets([]);
+
     if (!authReady || !user) {
-      setCloudArena(null);
-      setCloudMatches([]);
-      setCloudEvents([]);
-      setCloudAthletes([]);
-      setCloudBrackets([]);
       onPendingOpsCountChange?.(0);
       return;
     }
 
-    const targetArenaId = joinedArenaId || sanitizeId(`arena-${user.uid.slice(0, 12)}`);
+    const targetArenaId = joinedArenaId || getAccountArenaId(user.uid, 'A');
+    const isOwnCourtArena = !joinedArenaId || isOwnAccountArenaId(targetArenaId, user.uid);
+    const courtLetter = resolveCourtForArenaId(targetArenaId, user.uid) || 'A';
     const arenaRef = doc(db, 'arenas', targetArenaId);
     let cancelled = false;
     let unsubArena: (() => void) | null = null;
@@ -579,11 +587,11 @@ export function useFirestoreSync({
         const snap = await getDoc(arenaRef);
         if (cancelled) return;
 
-        if (!snap.exists() && !joinedArenaId) {
+        if (!snap.exists() && isOwnCourtArena) {
           const initialMatchId = 'partai-01';
           await setDoc(arenaRef, {
             id: targetArenaId,
-            name: 'Gelanggang A',
+            name: `Gelanggang ${courtLetter}`,
             tournamentName: 'Kejuaraan Nasional Pencak Silat IPSI 2026',
             venue: '',
             eventDate: '',
@@ -601,6 +609,7 @@ export function useFirestoreSync({
             matchNumber: 'Partai 01',
             weightClass: 'Kelas B Putra (50-55 kg)',
             stage: 'Final',
+            gelanggang: courtLetter,
             blueName: 'Ahmad Fauzi',
             blueContingent: 'DKI Jakarta',
             blueCountry: 'IDN',

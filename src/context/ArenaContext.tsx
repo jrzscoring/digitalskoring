@@ -7,6 +7,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -47,6 +50,7 @@ import {
 import type {
   ArenaCourt,
   ArenaData,
+  ArenaOperatorRecord,
   AthleteAgeCategory,
   AthleteData,
   AthleteGender,
@@ -62,15 +66,35 @@ import type {
   JurusJudgeId,
   JurusMatchState,
   JurusPenaltyType,
+  LoginAuditEntry,
   MatchData,
   MatchEvent,
   MatchStatus,
+  OfficialStationRole,
   PemasalanPoolSize,
+  UserOfficialProfile,
   VerificationKind,
   VerificationVoteChoice,
   VerificationVoteValue,
 } from '../types/silat';
+import {
+  PORTAL_ACCESS_STORAGE_KEY,
+  type PortalAccessMode,
+  detectClientDeviceLabel,
+  formatFirebaseAuthError,
+  getAccountArenaId,
+  isFullJuriUnlockedForMode,
+  isOwnAccountArenaId,
+  isSuperAdminEmail,
+  readStoredPortalAccessMode,
+  resolveCourtForArenaId,
+  resolvePortalModeAfterGoogleLogin,
+  verifyPortalPasscode,
+  writeAcknowledgedLimitedNoticeUid,
+  writeStoredPortalAccessMode,
+} from '../utils/authSession';
 import { buildTournamentBracketSlots } from '../utils/bracketBuilder';
+import { normalizeMatchCourt } from '../utils/courtDistribution';
 import {
   JURUS_DEFAULT_DURATION_SEC,
   JURUS_PENALTY_LABELS,
@@ -95,6 +119,7 @@ import {
   normalizeJurusJudgeCount,
   normalizeJurusType,
 } from '../utils/ipsiRules';
+import { applyOfficialProtestDelta, MAX_OFFICIAL_PROTESTS, normalizeProtestCount } from '../utils/officialProtest';
 import { playArenaGong, playBreakBuzzer, playConsensusChime } from '../utils/soundEffects';
 
 const LOCAL_STORAGE_KEY = 'silat_ipsi2026_arena_v1';
@@ -183,6 +208,13 @@ function buildMatchFromSlot(
   const resolvedRounds: 1 | 2 | 3 = isJurus ? 1 : totalRounds;
   const blueProfile = findMatchingAthleteProfile(slot.blueName, slot.blueContingent || '', athletesList);
   const redProfile = findMatchingAthleteProfile(slot.redName, slot.redContingent || '', athletesList);
+  const resolvedGelanggang: ArenaCourt =
+    slot.gelanggang === 'A' ||
+    slot.gelanggang === 'B' ||
+    slot.gelanggang === 'C' ||
+    slot.gelanggang === 'D'
+      ? slot.gelanggang
+      : normalizeMatchCourt(blueProfile?.gelanggang || redProfile?.gelanggang);
 
   const base: MatchData = {
     id: matchId,
@@ -191,6 +223,7 @@ function buildMatchFromSlot(
     matchNumber,
     weightClass: `${slot.weightClass} (${slot.gender})`,
     stage: slot.stage,
+    gelanggang: resolvedGelanggang,
     competitionCategory: isJurus ? 'Jurus' : 'Tanding',
     blueName: slot.blueName,
     blueContingent: slot.blueContingent || '-',
@@ -222,6 +255,8 @@ function buildMatchFromSlot(
     redTeguran1: 0,
     redTeguran2: 0,
     redPeringatan: 0,
+    blueProtests: 0,
+    redProtests: 0,
     winner: '',
     winMethod: '',
   };
@@ -365,6 +400,7 @@ function createDefaultSeed(): LocalStorePayload {
     matchNumber: 'Partai 01',
     weightClass: 'Kelas B Putra (50-55 kg)',
     stage: 'Final',
+    gelanggang: 'A',
     blueName: 'Ahmad Fauzi',
     blueContingent: 'DKI Jakarta',
     blueCountry: 'IDN',
@@ -393,6 +429,8 @@ function createDefaultSeed(): LocalStorePayload {
     redTeguran1: 0,
     redTeguran2: 0,
     redPeringatan: 0,
+    blueProtests: 0,
+    redProtests: 0,
     winner: '',
     winMethod: '',
   };
@@ -451,6 +489,7 @@ export interface CreateMatchInput {
   matchNumber: string;
   weightClass: string;
   stage: string;
+  gelanggang?: ArenaCourt;
   competitionCategory?: CompetitionCategory;
   jurusType?: JurusCategory;
   jurusJudgeCount?: number;
@@ -507,6 +546,14 @@ interface ArenaContextValue {
   retrySyncNow: () => Promise<void>;
   user: User | null;
   authReady: boolean;
+  authLoading: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
+  userProfile: UserOfficialProfile | null;
+  profileLoading: boolean;
+  loginLogs: LoginAuditEntry[];
+  operators: ArenaOperatorRecord[];
+  isSuperAdmin: boolean;
   syncError: string | null;
   arena: ArenaData;
   matches: MatchData[];
@@ -516,11 +563,37 @@ interface ArenaContextValue {
   athletes: AthleteData[];
   brackets: BracketMatchSlot[];
   liveTimerMs: number;
-  signInGoogle: () => Promise<void>;
+  portalAccessMode: PortalAccessMode;
+  isFullJuriUnlocked: boolean;
+  loginWithPortalPasscode: (passcode: string) => { valid: boolean; error?: string };
+  enterWithoutPassword: () => void;
+  logoutPortal: () => Promise<void>;
+  signInGoogle: () => Promise<boolean>;
   signOutGoogle: () => Promise<void>;
+  saveOfficialProfile: (input: {
+    displayName: string;
+    licenseNumber?: string;
+    contingentOrigin?: string;
+    preferredRole: OfficialStationRole;
+    preferredCourt: ArenaCourt;
+    preferredJudgeNumber?: number;
+    lastArenaId?: string;
+    onboardingCompleted?: boolean;
+  }) => Promise<boolean>;
+  recordLoginAudit: (
+    role: OfficialStationRole,
+    court: ArenaCourt,
+    arenaId: string
+  ) => Promise<void>;
   updateArenaMeta: (meta: UpdateArenaMetaInput) => Promise<void>;
   joinArenaById: (arenaId: string) => Promise<boolean>;
-  addOperatorUid: (uid: string, role: 'Sekretaris' | 'Dewan' | 'Timer' | 'Juri' | 'Scoreboard') => Promise<void>;
+  addOperatorUid: (
+    uid: string,
+    role: OfficialStationRole,
+    displayName?: string,
+    email?: string
+  ) => Promise<boolean>;
+  removeOperatorUid: (uid: string) => Promise<boolean>;
   createMatch: (input: CreateMatchInput) => Promise<void>;
   updateMatchMeta: (matchId: string, input: Partial<CreateMatchInput>) => Promise<void>;
   setActiveMatch: (matchId: string) => Promise<void>;
@@ -539,6 +612,9 @@ interface ArenaContextValue {
       redCountry?: string;
       redPhoto?: string;
     }>
+  ) => Promise<number>;
+  assignMatchesGelanggang: (
+    updates: Array<{ matchId: string; gelanggang: ArenaCourt }>
   ) => Promise<number>;
   deleteMatch: (matchId: string) => Promise<void>;
   resetMatch: (matchId: string) => Promise<void>;
@@ -572,6 +648,8 @@ interface ArenaContextValue {
     applyFallPoint?: boolean
   ) => Promise<void>;
   undoLastEvent: () => Promise<void>;
+  recordOfficialProtest: (matchId: string, corner: Corner, delta?: 1 | -1) => Promise<void>;
+  resetOfficialProtests: (matchId: string) => Promise<void>;
   declareWinner: (winner: Corner | 'draw', winMethod: string) => Promise<void>;
   autoAdjudicateWinner: () => Promise<void>;
   startTimer: () => Promise<void>;
@@ -606,12 +684,22 @@ const ArenaContext = createContext<ArenaContextValue | null>(null);
 export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserOfficialProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [loginLogs, setLoginLogs] = useState<LoginAuditEntry[]>([]);
+  const [operators, setOperators] = useState<ArenaOperatorRecord[]>([]);
   const [joinedArenaId, setJoinedArenaId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const params = new URLSearchParams(window.location.search);
     const a = params.get('arena');
     return a ? sanitizeId(a) : null;
   });
+  const joinedArenaIdRef = useRef<string | null>(joinedArenaId);
+  const [portalAccessMode, setPortalAccessMode] = useState<PortalAccessMode>(() =>
+    readStoredPortalAccessMode()
+  );
   const [localStore, setLocalStore] = useState<LocalStorePayload>(() => loadLocalStore(joinedArenaId));
   const localStoreRef = useRef<LocalStorePayload>(localStore);
   const [pendingOpsCount, setPendingOpsCount] = useState<number>(0);
@@ -629,6 +717,10 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   // Keep synchronous refs aligned with state
   useEffect(() => {
+    joinedArenaIdRef.current = joinedArenaId;
+  }, [joinedArenaId]);
+
+  useEffect(() => {
     localStoreRef.current = localStore;
   }, [localStore]);
 
@@ -641,9 +733,108 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     const unsub = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setAuthReady(true);
+      if (!currentUser) {
+        setUserProfile(null);
+        setProfileLoading(false);
+        setLoginLogs([]);
+        setOperators([]);
+        setPortalAccessMode('locked');
+        writeStoredPortalAccessMode('locked');
+        writeAcknowledgedLimitedNoticeUid(null);
+      } else {
+        // Ensure signed-in Google account never stays bound to shared public gelanggang-a..d
+        const activeJoin = joinedArenaIdRef.current;
+        if (activeJoin && /^gelanggang-[a-d]$/.test(activeJoin)) {
+          const court = resolveCourtForArenaId(activeJoin) || 'A';
+          const scoped = court === 'A' ? null : getAccountArenaId(currentUser.uid, court);
+          joinedArenaIdRef.current = scoped;
+          setJoinedArenaId(scoped);
+        }
+        // Upon Google sign-in, system opens immediately in limited (guest) mode unless full Juri access was unlocked
+        const nextAccessMode = resolvePortalModeAfterGoogleLogin(readStoredPortalAccessMode());
+        setPortalAccessMode(nextAccessMode);
+        writeStoredPortalAccessMode(nextAccessMode);
+        setProfileLoading(true);
+      }
     });
     return () => unsub();
   }, []);
+
+  // Official user profile & login audit history subscription (with IndexedDB offline mirror)
+  useEffect(() => {
+    if (!authReady || !user) return;
+    let cancelled = false;
+    const profileMirrorKey = `silat_official_profile_${user.uid}`;
+    let hydratedFromMirror = false;
+
+    void readRecordFromIndexedDb<UserOfficialProfile>(profileMirrorKey).then((cached) => {
+      if (!cancelled && cached && cached.uid === user.uid) {
+        hydratedFromMirror = true;
+        setUserProfile((prev) => prev || cached);
+        setProfileLoading(false);
+      }
+    });
+
+    if (!isBrowserOnline()) {
+      const timer = window.setTimeout(() => {
+        if (!cancelled && !hydratedFromMirror) {
+          setProfileLoading(false);
+        }
+      }, 200);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+      };
+    }
+
+    const profileRef = doc(db, 'users', user.uid);
+    const unsubProfile = onSnapshot(
+      profileRef,
+      (snap) => {
+        if (cancelled) return;
+        if (snap.exists()) {
+          const data = snap.data() as UserOfficialProfile;
+          setUserProfile(data);
+          void mirrorRecordToIndexedDb(profileMirrorKey, data);
+        } else {
+          setUserProfile(null);
+        }
+        setProfileLoading(false);
+      },
+      (err) => {
+        if (cancelled) return;
+        setProfileLoading(false);
+        if (isOfflineNetworkError(err)) return;
+        if (isPermissionDeniedError(err)) {
+          handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
+        }
+      }
+    );
+
+    const logsQuery = query(
+      collection(db, 'users', user.uid, 'loginLogs'),
+      where('uid', '==', user.uid),
+      orderBy('createdAt', 'desc'),
+      limit(10)
+    );
+    const unsubLogs = onSnapshot(
+      logsQuery,
+      (snap) => {
+        if (cancelled) return;
+        setLoginLogs(snap.docs.map((d) => d.data() as LoginAuditEntry));
+      },
+      (err) => {
+        if (isOfflineNetworkError(err)) return;
+        console.warn('Login logs listener fallback:', err.message);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+      unsubProfile();
+      unsubLogs();
+    };
+  }, [authReady, user]);
 
   // BroadcastChannel + localStorage listener for instant multi-tab sync in local/offline mode
   useEffect(() => {
@@ -655,6 +846,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           const payload = ev.data.payload as LocalStorePayload;
           localStoreRef.current = payload;
           setLocalStore(payload);
+        } else if (ev.data?.type === 'PORTAL_ACCESS_UPDATE') {
+          const nextMode = ev.data.mode as PortalAccessMode;
+          if (nextMode === 'locked' || nextMode === 'guest' || nextMode === 'full') {
+            setPortalAccessMode(nextMode);
+          }
         }
       };
     }
@@ -668,6 +864,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         } catch {
           // ignore parse error
         }
+      } else if (ev.key === PORTAL_ACCESS_STORAGE_KEY) {
+        setPortalAccessMode(readStoredPortalAccessMode());
       }
     };
     window.addEventListener('storage', onStorage);
@@ -759,7 +957,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   });
 
   const mode: 'local' | 'firebase' | 'rtdb' =
-    user && cloudArena ? 'firebase' : rtdb && rtdbConnected ? 'rtdb' : 'local';
+    user ? (cloudArena ? 'firebase' : 'local') : rtdb && rtdbConnected ? 'rtdb' : 'local';
 
   const commitLocalBackupOnly = useCallback(
     (updater: (prev: LocalStorePayload) => LocalStorePayload): LocalStorePayload => {
@@ -774,7 +972,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     (updater: (prev: LocalStorePayload) => LocalStorePayload) => {
       const next = updater(localStoreRef.current);
       persistLocalMirror(next);
-      if (rtdb && !(user && cloudArena)) {
+      if (rtdb && !user) {
         const targetId = joinedArenaId || next.arena.id || 'gelanggang-a';
         const backupRecord = saveRtdbLocalBackup(targetId, next, true);
         const sanitizedPayload = sanitizeForRtdb(next);
@@ -1059,19 +1257,189 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearInterval(interval);
   }, [activeMatch]);
 
-  const signInGoogle = useCallback(async () => {
+  const clearAuthError = useCallback(() => {
+    setAuthError(null);
+  }, []);
+
+  const signInGoogle = useCallback(async (): Promise<boolean> => {
     setSyncError(null);
+    setAuthError(null);
+    setAuthLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
+      return true;
     } catch (err) {
-      setSyncError(err instanceof Error ? err.message : 'Gagal masuk dengan Google.');
+      const msg = formatFirebaseAuthError(err);
+      setAuthError(msg);
+      setSyncError(msg);
+      return false;
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [setSyncError]);
+
+  const broadcastPortalAccessMode = useCallback((nextMode: PortalAccessMode) => {
+    setPortalAccessMode(nextMode);
+    writeStoredPortalAccessMode(nextMode);
+    try {
+      channelRef.current?.postMessage({ type: 'PORTAL_ACCESS_UPDATE', mode: nextMode });
+    } catch {
+      // ignore broadcast errors
     }
   }, []);
 
   const signOutGoogle = useCallback(async () => {
+    setAuthError(null);
+    setSyncError(null);
+    broadcastPortalAccessMode('locked');
+    writeAcknowledgedLimitedNoticeUid(null);
     await firebaseSignOut(auth);
-    setJoinedArenaId(null);
-  }, []);
+    setUserProfile(null);
+    setLoginLogs([]);
+    setOperators([]);
+    const urlArenaParam =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('arena')
+        : null;
+    const nextJoined = urlArenaParam ? sanitizeId(urlArenaParam) : null;
+    joinedArenaIdRef.current = nextJoined;
+    setJoinedArenaId(nextJoined);
+    if (localStoreRef.current.arena.ownerId !== 'local-operator') {
+      persistLocalMirror(createDefaultSeed());
+    }
+  }, [broadcastPortalAccessMode, setSyncError, persistLocalMirror]);
+
+  const loginWithPortalPasscode = useCallback(
+    (passcode: string): { valid: boolean; error?: string } => {
+      const check = verifyPortalPasscode(passcode);
+      if (!check.valid) return check;
+      broadcastPortalAccessMode('full');
+      return { valid: true };
+    },
+    [broadcastPortalAccessMode]
+  );
+
+  const enterWithoutPassword = useCallback(() => {
+    broadcastPortalAccessMode('guest');
+  }, [broadcastPortalAccessMode]);
+
+  const logoutPortal = useCallback(async () => {
+    await signOutGoogle();
+  }, [signOutGoogle]);
+
+  const saveOfficialProfile = useCallback(
+    async (input: {
+      displayName: string;
+      licenseNumber?: string;
+      contingentOrigin?: string;
+      preferredRole: OfficialStationRole;
+      preferredCourt: ArenaCourt;
+      preferredJudgeNumber?: number;
+      lastArenaId?: string;
+      onboardingCompleted?: boolean;
+    }): Promise<boolean> => {
+      if (!user) return false;
+      const safeName = clampStr(input.displayName, 80, user.displayName || 'Petugas Pertandingan');
+      const safeEmail = (user.email || '').trim().slice(0, 160);
+      if (!safeEmail) {
+        setAuthError('Akun Google tidak memiliki alamat email terverifikasi.');
+        return false;
+      }
+
+      const safeLicense = (input.licenseNumber || '').trim().slice(0, 48);
+      const safeContingent = (input.contingentOrigin || '').trim().slice(0, 80);
+      const safePhoto = (user.photoURL || '').trim().slice(0, 500);
+      const safeArenaId = input.lastArenaId ? sanitizeId(input.lastArenaId) : undefined;
+      const judgeNum =
+        input.preferredRole === 'Juri'
+          ? Math.min(10, Math.max(1, Math.round(input.preferredJudgeNumber || 1)))
+          : undefined;
+
+      const localProfile: UserOfficialProfile = {
+        uid: user.uid,
+        displayName: safeName,
+        email: safeEmail,
+        ...(safePhoto ? { photoURL: safePhoto } : {}),
+        ...(safeLicense ? { licenseNumber: safeLicense } : {}),
+        ...(safeContingent ? { contingentOrigin: safeContingent } : {}),
+        preferredRole: input.preferredRole,
+        preferredCourt: input.preferredCourt,
+        ...(judgeNum !== undefined ? { preferredJudgeNumber: judgeNum } : {}),
+        ...(safeArenaId ? { lastArenaId: safeArenaId } : {}),
+        onboardingCompleted: input.onboardingCompleted ?? true,
+      };
+
+      const profileMirrorKey = `silat_official_profile_${user.uid}`;
+      setUserProfile(localProfile);
+      void mirrorRecordToIndexedDb(profileMirrorKey, localProfile);
+
+      if (!isBrowserOnline()) {
+        return true;
+      }
+
+      const profileRef = doc(db, 'users', user.uid);
+      try {
+        const snap = await getDoc(profileRef);
+        const firestorePayload: Record<string, unknown> = {
+          displayName: safeName,
+          preferredRole: input.preferredRole,
+          preferredCourt: input.preferredCourt,
+          onboardingCompleted: input.onboardingCompleted ?? true,
+          lastLoginAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ...(safePhoto ? { photoURL: safePhoto } : {}),
+          ...(safeLicense ? { licenseNumber: safeLicense } : { licenseNumber: '' }),
+          ...(safeContingent ? { contingentOrigin: safeContingent } : { contingentOrigin: '' }),
+          ...(judgeNum !== undefined ? { preferredJudgeNumber: judgeNum } : {}),
+          ...(safeArenaId ? { lastArenaId: safeArenaId } : {}),
+        };
+
+        if (!snap.exists()) {
+          await setDoc(profileRef, {
+            uid: user.uid,
+            email: safeEmail,
+            ...firestorePayload,
+            createdAt: serverTimestamp(),
+          });
+        } else {
+          await updateDoc(profileRef, firestorePayload);
+        }
+        return true;
+      } catch (err) {
+        if (isOfflineNetworkError(err)) {
+          return true;
+        }
+        handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
+      }
+    },
+    [user]
+  );
+
+  const recordLoginAudit = useCallback(
+    async (role: OfficialStationRole, court: ArenaCourt, targetArenaId: string) => {
+      if (!user || !user.email || !isBrowserOnline()) return;
+      const logId = sanitizeId(`log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
+      const safeArena = sanitizeId(targetArenaId || `gelanggang-${court.toLowerCase()}`);
+      const entryData = {
+        id: logId,
+        uid: user.uid,
+        email: user.email.trim().slice(0, 160),
+        deviceLabel: detectClientDeviceLabel(),
+        stationRole: role,
+        court,
+        arenaId: safeArena,
+        loginAtMs: Date.now(),
+        createdAt: serverTimestamp(),
+      };
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'loginLogs', logId), entryData);
+      } catch (err) {
+        if (isOfflineNetworkError(err)) return;
+        console.warn('Login audit warning:', err instanceof Error ? err.message : err);
+      }
+    },
+    [user]
+  );
 
   const recordEvent = useCallback(
     async (
@@ -1189,16 +1557,28 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         setSyncError('Silakan masuk Google terlebih dahulu untuk bergabung ke Arena Firestore.');
         return false;
       }
-      try {
-        const snap = await getDoc(doc(db, 'arenas', safeId));
-        if (!snap.exists()) {
-          setSyncError(`Gelanggang "${safeId}" tidak ditemukan atau akses ditolak.`);
-          return false;
-        }
-        setJoinedArenaId(safeId);
+
+      // When signed in with Google, map Gelanggang A-D preset IDs to this account's isolated Firestore arenas
+      const targetId = /^gelanggang-[a-d]$/.test(safeId)
+        ? getAccountArenaId(user.uid, resolveCourtForArenaId(safeId) || 'A')
+        : safeId;
+
+      if (isOwnAccountArenaId(targetId, user.uid)) {
+        setJoinedArenaId(targetId);
         setSyncError(null);
         return true;
-      } catch (err) {
+      }
+
+      try {
+        const snap = await getDoc(doc(db, 'arenas', targetId));
+        if (!snap.exists()) {
+          setSyncError(`Gelanggang "${targetId}" tidak ditemukan atau akses ditolak.`);
+          return false;
+        }
+        setJoinedArenaId(targetId);
+        setSyncError(null);
+        return true;
+      } catch {
         setSyncError('Akses gelanggang ditolak. Pastikan UID Anda telah didaftarkan Sekretaris.');
         return false;
       }
@@ -1206,21 +1586,95 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [user]
   );
 
+  // Subscribe to operators registered for the active Firestore arena
+  useEffect(() => {
+    if (!user || !cloudArena || !isBrowserOnline()) {
+      setOperators([]);
+      return;
+    }
+    const isOwnerOrAdmin =
+      cloudArena.ownerId === user.uid || isSuperAdminEmail(user.email, user.emailVerified);
+    const opsQuery = isOwnerOrAdmin
+      ? query(
+          collection(db, 'arenas', cloudArena.id, 'operators'),
+          where('ownerId', '==', cloudArena.ownerId)
+        )
+      : query(
+          collection(db, 'arenas', cloudArena.id, 'operators'),
+          where('uid', '==', user.uid)
+        );
+    const unsub = onSnapshot(
+      opsQuery,
+      (snap) => {
+        setOperators(snap.docs.map((d) => d.data() as ArenaOperatorRecord));
+      },
+      (err) => {
+        if (!isOfflineNetworkError(err)) {
+          console.warn('Operators listener fallback:', err.message);
+        }
+      }
+    );
+    return () => unsub();
+  }, [user, cloudArena]);
+
   const addOperatorUid = useCallback(
-    async (uid: string, role: 'Sekretaris' | 'Dewan' | 'Timer' | 'Juri' | 'Scoreboard') => {
-      if (mode !== 'firebase' || !cloudArena || !user) return;
+    async (
+      uid: string,
+      role: OfficialStationRole,
+      displayName?: string,
+      email?: string
+    ): Promise<boolean> => {
+      if (mode !== 'firebase' || !cloudArena || !user) {
+        setSyncError('Hubungkan mode Cloud Firestore (login Google) untuk mendaftarkan operator.');
+        return false;
+      }
+      const safeUid = sanitizeId(uid);
+      if (!safeUid || safeUid.length < 4) {
+        setSyncError('UID Petugas tidak valid.');
+        return false;
+      }
+      const safeName = (displayName || '').trim().slice(0, 80);
+      const safeEmail = (email || '').trim().slice(0, 160);
+      const path = `arenas/${cloudArena.id}/operators/${safeUid}`;
+      const opRef = doc(db, 'arenas', cloudArena.id, 'operators', safeUid);
+      try {
+        const existingSnap = await getDoc(opRef);
+        if (existingSnap.exists()) {
+          await updateDoc(opRef, {
+            role,
+            ...(safeName ? { displayName: safeName } : {}),
+            ...(safeEmail ? { email: safeEmail } : {}),
+          });
+        } else {
+          await setDoc(opRef, {
+            uid: safeUid,
+            arenaId: cloudArena.id,
+            ownerId: cloudArena.ownerId,
+            role,
+            ...(safeName ? { displayName: safeName } : {}),
+            ...(safeEmail ? { email: safeEmail } : {}),
+            createdAt: serverTimestamp(),
+          });
+        }
+        setSyncError(null);
+        return true;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    },
+    [mode, cloudArena, user, setSyncError]
+  );
+
+  const removeOperatorUid = useCallback(
+    async (uid: string): Promise<boolean> => {
+      if (mode !== 'firebase' || !cloudArena || !user) return false;
       const safeUid = sanitizeId(uid);
       const path = `arenas/${cloudArena.id}/operators/${safeUid}`;
       try {
-        await setDoc(doc(db, 'arenas', cloudArena.id, 'operators', safeUid), {
-          uid: safeUid,
-          arenaId: cloudArena.id,
-          ownerId: cloudArena.ownerId,
-          role,
-          createdAt: serverTimestamp(),
-        });
+        await deleteDoc(doc(db, 'arenas', cloudArena.id, 'operators', safeUid));
+        return true;
       } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, path);
+        handleFirestoreError(err, OperationType.DELETE, path);
       }
     },
     [mode, cloudArena, user]
@@ -1258,6 +1712,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           resolvedJurusType || 'Kelas Bebas'
         ),
         stage: clampStr(input.stage, 40, 'Penyisihan'),
+        gelanggang: normalizeMatchCourt(input.gelanggang),
         competitionCategory: isJurus ? 'Jurus' : 'Tanding',
         ...(isJurus
           ? {
@@ -1299,6 +1754,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         redTeguran1: 0,
         redTeguran2: 0,
         redPeringatan: 0,
+        blueProtests: 0,
+        redProtests: 0,
         winner: '',
         winMethod: '',
       };
@@ -1354,6 +1811,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         matchNumber: input.matchNumber ? clampStr(input.matchNumber, 32) : target.matchNumber,
         weightClass: input.weightClass ? clampStr(input.weightClass, 80) : target.weightClass,
         stage: input.stage ? clampStr(input.stage, 40) : target.stage,
+        ...(input.gelanggang ? { gelanggang: normalizeMatchCourt(input.gelanggang) } : {}),
         competitionCategory: nextCompCategory,
         blueName: input.blueName ? clampStr(input.blueName, 80) : target.blueName,
         blueContingent: input.blueContingent ? clampStr(input.blueContingent, 80) : target.blueContingent,
@@ -1692,6 +2150,46 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [matches, athletes, brackets, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
+  const assignMatchesGelanggang = useCallback(
+    async (updates: Array<{ matchId: string; gelanggang: ArenaCourt }>): Promise<number> => {
+      if (updates.length === 0) return 0;
+      const changedMap = new Map<string, ArenaCourt>();
+      for (const item of updates) {
+        const existing = matches.find((m) => m.id === item.matchId);
+        if (!existing) continue;
+        const nextCourt = normalizeMatchCourt(item.gelanggang);
+        if (normalizeMatchCourt(existing.gelanggang) !== nextCourt || !existing.gelanggang) {
+          changedMap.set(item.matchId, nextCourt);
+        }
+      }
+
+      if (changedMap.size === 0) return 0;
+
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => {
+          const nextCourt = changedMap.get(m.id);
+          return nextCourt ? { ...m, gelanggang: nextCourt } : m;
+        }),
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        const ops: QueuedOpInput[] = Array.from(changedMap.entries()).map(([matchId, nextCourt]) => ({
+          opType: 'update',
+          pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+          data: { gelanggang: nextCourt },
+          timestampMode: 'update',
+        }));
+        await executeFirestoreWithFallback(cloudArena.id, ops, localUpdater);
+      } else {
+        commitLocalStore(localUpdater);
+      }
+
+      return changedMap.size;
+    },
+    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
+  );
+
   const deleteMatch = useCallback(
     async (matchId: string) => {
       if (matches.length <= 1) return;
@@ -1755,6 +2253,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         redTeguran1: 0,
         redTeguran2: 0,
         redPeringatan: 0,
+        blueProtests: 0,
+        redProtests: 0,
         judge1Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
         judge2Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
         judge3Vote: { corner: 'none' as const, points: 0, timestampMs: 0, round: 1 },
@@ -1846,9 +2346,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const resetSystem = useCallback(async () => {
     const targetArenaId = cloudArena?.id || arena.id || 'gelanggang-a';
     const targetOwnerId = cloudArena?.ownerId || arena.ownerId || 'local-operator';
-    const defaultArenaLabel = targetArenaId.startsWith('gelanggang-')
-      ? `Gelanggang ${targetArenaId.replace('gelanggang-', '').toUpperCase()}`
-      : 'Gelanggang A';
+    const courtLetter = resolveCourtForArenaId(targetArenaId, user?.uid);
+    const defaultArenaLabel = courtLetter ? `Gelanggang ${courtLetter}` : 'Gelanggang A';
 
     const baseSeed = createDefaultSeed();
     const freshSeed: LocalStorePayload = {
@@ -2099,6 +2598,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           matchNumber: clampStr(m.matchNumber || `Partai ${String(idx + 1).padStart(2, '0')}`, 32, `Partai ${idx + 1}`),
           weightClass: clampStr(m.weightClass || 'Kelas Bebas', 80, 'Kelas Bebas'),
           stage: clampStr(m.stage || 'Babak Penyisihan', 40, 'Babak Penyisihan'),
+          gelanggang: normalizeMatchCourt(m.gelanggang),
           blueName: clampStr(m.blueName || 'Sudut Biru', 80, 'Sudut Biru'),
           blueContingent: clampStr(m.blueContingent || '-', 80, '-'),
           redName: clampStr(m.redName || 'Sudut Merah', 80, 'Sudut Merah'),
@@ -2128,6 +2628,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           redTeguran1: Math.min(20, Math.max(0, Math.round(Number(m.redTeguran1) || 0))),
           redTeguran2: Math.min(20, Math.max(0, Math.round(Number(m.redTeguran2) || 0))),
           redPeringatan: Math.min(3, Math.max(0, Math.round(Number(m.redPeringatan) || 0))),
+          blueProtests: normalizeProtestCount(m.blueProtests),
+          redProtests: normalizeProtestCount(m.redProtests),
           winner: safeWinner,
           winMethod: (m.winMethod || '').slice(0, 64),
         };
@@ -3055,7 +3557,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const undoLastEvent = useCallback(async () => {
     const lastActive = events.find(
-      (e) => !e.undone && e.type !== 'judge_press' && !e.type.startsWith('jurus_')
+      (e) =>
+        !e.undone &&
+        e.type !== 'judge_press' &&
+        e.type !== 'official_protest' &&
+        !e.type.startsWith('jurus_')
     );
     if (!lastActive || activeMatch.status === 'finished') return;
 
@@ -3298,6 +3804,88 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       });
     },
     [activeMatch, brackets, matches, athletes, mode, cloudArena, user, commitLocalStore, executeFirestoreWithFallback, recordEvent]
+  );
+
+  const recordOfficialProtest = useCallback(
+    async (matchId: string, corner: Corner, delta: 1 | -1 = 1) => {
+      const target = matches.find((m) => m.id === matchId);
+      if (!target || target.status === 'finished') return;
+      const key = corner === 'blue' ? 'blueProtests' : 'redProtests';
+      const current = normalizeProtestCount(target[key]);
+      const next = applyOfficialProtestDelta(current, delta);
+      if (next === current) return;
+
+      const patch: Partial<MatchData> = { [key]: next };
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => (m.id === matchId ? { ...m, ...patch } : m)),
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        await executeFirestoreWithFallback(
+          cloudArena.id,
+          [
+            {
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+              data: { ...patch },
+              timestampMode: 'update',
+            },
+          ],
+          localUpdater
+        );
+      } else {
+        commitLocalStore(localUpdater);
+      }
+
+      const cornerLabel = corner === 'blue' ? 'Sudut Biru' : 'Sudut Merah';
+      const remaining = MAX_OFFICIAL_PROTESTS - next;
+      const timeStr = formatMatchTime(getRemainingTimerMs(target, Date.now()));
+      await recordEvent(matchId, {
+        actorRole: 'Sekretaris',
+        corner,
+        type: 'official_protest',
+        pointsDelta: 0,
+        round: target.currentRound || 1,
+        matchTimeFormatted: timeStr,
+        description:
+          delta > 0
+            ? `Protes Pelatih/Official ${cornerLabel} (${next}/${MAX_OFFICIAL_PROTESTS} terpakai · sisa ${remaining} kartu)`
+            : `Pembatalan catatan protes Official ${cornerLabel} (${next}/${MAX_OFFICIAL_PROTESTS} terpakai · sisa ${remaining} kartu)`,
+        undone: false,
+      });
+    },
+    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback, recordEvent]
+  );
+
+  const resetOfficialProtests = useCallback(
+    async (matchId: string) => {
+      const target = matches.find((m) => m.id === matchId);
+      if (!target || target.status === 'finished') return;
+      const patch: Partial<MatchData> = { blueProtests: 0, redProtests: 0 };
+      const localUpdater = (prev: LocalStorePayload): LocalStorePayload => ({
+        ...prev,
+        matches: prev.matches.map((m) => (m.id === matchId ? { ...m, ...patch } : m)),
+      });
+
+      if (mode === 'firebase' && cloudArena) {
+        await executeFirestoreWithFallback(
+          cloudArena.id,
+          [
+            {
+              opType: 'update',
+              pathSegments: ['arenas', cloudArena.id, 'matches', matchId],
+              data: { ...patch },
+              timestampMode: 'update',
+            },
+          ],
+          localUpdater
+        );
+      } else {
+        commitLocalStore(localUpdater);
+      }
+    },
+    [matches, mode, cloudArena, commitLocalStore, executeFirestoreWithFallback]
   );
 
   const autoAdjudicateWinner = useCallback(async () => {
@@ -4689,6 +5277,16 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [brackets, matches, arena.id, arena.ownerId, mode, cloudArena, user, executeFirestoreWithFallback, commitLocalStore]
   );
 
+  const isSuperAdmin = useMemo(
+    () => isSuperAdminEmail(user?.email, user?.emailVerified),
+    [user?.email, user?.emailVerified]
+  );
+
+  const isFullJuriUnlocked = useMemo(
+    () => isFullJuriUnlockedForMode(portalAccessMode),
+    [portalAccessMode]
+  );
+
   const value: ArenaContextValue = {
     mode,
     isOnline,
@@ -4698,6 +5296,14 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     rtdbProjectId: userRtdbProjectId,
     user,
     authReady,
+    authLoading,
+    authError,
+    clearAuthError,
+    userProfile,
+    profileLoading,
+    loginLogs,
+    operators,
+    isSuperAdmin,
     syncError,
     arena,
     matches,
@@ -4707,11 +5313,19 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     athletes,
     brackets,
     liveTimerMs,
+    portalAccessMode,
+    isFullJuriUnlocked,
+    loginWithPortalPasscode,
+    enterWithoutPassword,
+    logoutPortal,
     signInGoogle,
     signOutGoogle,
+    saveOfficialProfile,
+    recordLoginAudit,
     updateArenaMeta,
     joinArenaById,
     addOperatorUid,
+    removeOperatorUid,
     createMatch,
     updateMatchMeta,
     setActiveMatch,
@@ -4719,6 +5333,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     setMatchJurusJudgeCount,
     setMatchRoundDuration,
     applyLotingMatchAssignments,
+    assignMatchesGelanggang,
     deleteMatch,
     resetMatch,
     resetSystem,
@@ -4743,6 +5358,8 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     resolveVerification,
     submitVerification,
     undoLastEvent,
+    recordOfficialProtest,
+    resetOfficialProtests,
     declareWinner,
     autoAdjudicateWinner,
     startTimer,

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Lock, Maximize2, Minimize2, Minus, Plus, RotateCcw, Shield, Unlock } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { ArrowLeft, CheckCircle2, KeyRound, Lock, Maximize2, Minimize2, Minus, Plus, RotateCcw, Shield, Unlock, X } from 'lucide-react';
 import juriLogo from '../assets/juri1-logo.png';
 import pukulanIcon from '../assets/pukulan-white.png';
 import tendanganIcon from '../assets/tendangan-white.png';
@@ -36,6 +36,8 @@ export function JuriView({ onNavigate }: JuriViewProps) {
     arena,
     activeMatch,
     liveTimerMs,
+    isFullJuriUnlocked,
+    loginWithPortalPasscode,
     sendJudgeVote,
     clearJudgeVote,
     castVerificationVote,
@@ -47,6 +49,9 @@ export function JuriView({ onNavigate }: JuriViewProps) {
   } = useArena();
 
   const [selectedJudgeId, setSelectedJudgeId] = useState<JurusJudgeId | null>(null);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const [unlockPasscode, setUnlockPasscode] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState<{ text: string; tone: 'pending' | 'awarded' } | null>(null);
   const feedbackTimerRef = useRef<number | null>(null);
@@ -92,12 +97,120 @@ export function JuriView({ onNavigate }: JuriViewProps) {
 
   useEffect(() => {
     if (selectedJudgeId === null) return;
+    if (!isFullJuriUnlocked && selectedJudgeId > 1) {
+      setSelectedJudgeId(null);
+      return;
+    }
     if (isJurus && selectedJudgeId > jurusJudgeCount) {
       setSelectedJudgeId(null);
     } else if (!isJurus && selectedJudgeId > 3) {
       setSelectedJudgeId(null);
     }
-  }, [isJurus, selectedJudgeId, jurusJudgeCount]);
+  }, [isFullJuriUnlocked, isJurus, selectedJudgeId, jurusJudgeCount]);
+
+  const openUnlockModal = () => {
+    setUnlockPasscode('');
+    setUnlockError(null);
+    setShowUnlockModal(true);
+  };
+
+  const handleUnlockSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setUnlockError(null);
+    const res = loginWithPortalPasscode(unlockPasscode);
+    if (!res.valid) {
+      setUnlockError(res.error || 'Password login tidak sesuai.');
+      return;
+    }
+    setUnlockPasscode('');
+    setShowUnlockModal(false);
+  };
+
+  const unlockModalNode = showUnlockModal ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="juri-unlock-modal-title"
+      data-testid="juri-unlock-modal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setShowUnlockModal(false);
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+    >
+      <form
+        onSubmit={handleUnlockSubmit}
+        className="w-full max-w-md rounded-2xl bg-[#120726] border border-purple-500/60 p-5 sm:p-6 shadow-2xl space-y-4 text-white"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-purple-800/60 pb-3">
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-5 h-5 text-yellow-300 shrink-0" />
+            <h2 id="juri-unlock-modal-title" className="font-display text-base font-bold">
+              Buka Semua Fitur Juri
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowUnlockModal(false)}
+            aria-label="Tutup modal password"
+            className="p-1.5 rounded-lg bg-black/50 text-blue-200 hover:text-white cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Hubungi whatsapp 081379876424 untuk akses penuh aplikasi
+        </p>
+
+        <div>
+          <label htmlFor="juri-unlock-password-input" className="block text-xs font-semibold text-blue-200 mb-1.5">
+            Password Login
+          </label>
+          <input
+            id="juri-unlock-password-input"
+            data-testid="juri-unlock-password-input"
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            value={unlockPasscode}
+            onChange={(e) => {
+              setUnlockPasscode(e.target.value);
+              if (unlockError) setUnlockError(null);
+            }}
+            placeholder="Masukkan password kejuaraan"
+            className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-black/65 border border-blue-500/45 text-white font-mono text-sm tracking-widest placeholder:font-sans placeholder:tracking-normal placeholder:text-xs placeholder:text-slate-400/60 focus:outline-none focus:border-yellow-400"
+          />
+        </div>
+
+        {unlockError && (
+          <div
+            role="alert"
+            data-testid="juri-unlock-error"
+            className="rounded-xl bg-rose-950/85 border border-rose-400/70 px-3 py-2 text-xs text-rose-100"
+          >
+            {unlockError}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setShowUnlockModal(false)}
+            className="min-h-[38px] px-4 py-1.5 rounded-xl bg-black/55 border border-white/15 text-xs font-semibold text-slate-200 hover:text-white cursor-pointer"
+          >
+            Batal
+          </button>
+          <button
+            type="submit"
+            data-testid="juri-unlock-submit-btn"
+            className="min-h-[38px] px-4 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold cursor-pointer"
+          >
+            Buka Akses Juri
+          </button>
+        </div>
+      </form>
+    </div>
+  ) : null;
 
   if (selectedJudgeId === null) {
     const selectionIds: JurusJudgeId[] = isJurus ? jurusJudgeIds : ([1, 2, 3] as JurusJudgeId[]);
@@ -148,36 +261,104 @@ export function JuriView({ onNavigate }: JuriViewProps) {
 
           <section
             data-testid="juri-selection-screen"
-            className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 py-4"
+            className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-7 py-4"
           >
-            <h1 className="font-display text-2xl sm:text-4xl font-extrabold uppercase tracking-wide text-white text-center">
-              Pilih Juri yang Bertugas
-            </h1>
+            <div className="text-center space-y-2">
+              <h1 className="font-display text-2xl sm:text-4xl font-extrabold uppercase tracking-wide text-white">
+                Pilih Juri yang Bertugas
+              </h1>
+              {isFullJuriUnlocked ? (
+                <p
+                  data-testid="juri-full-access-banner"
+                  className="text-xs sm:text-sm text-emerald-300 font-medium flex items-center justify-center gap-1.5"
+                >
+                  <Unlock className="w-3.5 h-3.5 shrink-0" />
+                  <span>Akses Penuh Aktif &middot; Seluruh Juri Terbuka</span>
+                </p>
+              ) : (
+                <div
+                  data-testid="juri-restricted-banner"
+                  className="max-w-2xl mx-auto rounded-2xl bg-[#0d051c]/90 border border-amber-400/55 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-left"
+                >
+                  <div className="flex items-start gap-2.5 text-xs sm:text-sm text-amber-100">
+                    <Lock className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+                    <span>
+                      <strong className="text-white">Mode Terbatas:</strong> Hanya{' '}
+                      <strong className="text-yellow-300">Juri 1</strong> yang aktif. Masukkan password login melalui Panel Juri untuk membuka fitur penuh seluruh Juri.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="juri-open-unlock-modal-btn"
+                    onClick={openUnlockModal}
+                    className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-black text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                  >
+                    <Unlock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Buka Semua Juri</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className={`w-full grid gap-4 sm:gap-5 ${gridClass}`}>
-              {selectionIds.map((jid) => (
-                <button
-                  key={jid}
-                  type="button"
-                  data-testid={`select-judge-${jid}`}
-                  onClick={() => setSelectedJudgeId(jid)}
-                  className={`group rounded-3xl bg-gradient-to-b from-blue-950/85 via-[#130829]/95 to-black/95 border-2 border-blue-500/45 hover:border-yellow-400 hover:from-blue-900/90 hover:to-[#230847]/95 active:scale-[0.98] transition-all duration-150 flex flex-col items-center justify-center gap-3 sm:gap-4 cursor-pointer shadow-xl shadow-black/60 ${cardHeightClass}`}
-                >
-                  <img
-                    src={juriLogo}
-                    alt={`Logo Juri ${jid}`}
-                    className={`${
-                      selectionIds.length > 4 ? 'w-14 h-14 sm:w-16 sm:h-16' : 'w-20 h-20'
-                    } object-contain select-none group-hover:scale-110 transition-transform duration-150`}
-                  />
-                  <div className="font-display text-xl sm:text-2xl font-extrabold tracking-wide text-white group-hover:text-yellow-300 transition-colors">
-                    Juri {jid}
-                  </div>
-                </button>
-              ))}
+              {selectionIds.map((jid) => {
+                const isRestrictedJudge = !isFullJuriUnlocked && jid > 1;
+                return (
+                  <button
+                    key={jid}
+                    type="button"
+                    data-testid={`select-judge-${jid}`}
+                    aria-label={
+                      isRestrictedJudge
+                        ? `Juri ${jid} terkunci, klik untuk login password`
+                        : `Pilih Juri ${jid}`
+                    }
+                    onClick={() => {
+                      if (isRestrictedJudge) {
+                        openUnlockModal();
+                      } else {
+                        setSelectedJudgeId(jid);
+                      }
+                    }}
+                    className={`group rounded-3xl border-2 transition-all duration-150 flex flex-col items-center justify-center gap-3 sm:gap-4 shadow-xl shadow-black/60 cursor-pointer ${cardHeightClass} ${
+                      isRestrictedJudge
+                        ? 'bg-black/60 border-amber-500/35 hover:border-yellow-400/75 opacity-75 hover:opacity-100'
+                        : 'bg-gradient-to-b from-blue-950/85 via-[#130829]/95 to-black/95 border-blue-500/45 hover:border-yellow-400 hover:from-blue-900/90 hover:to-[#230847]/95 active:scale-[0.98]'
+                    }`}
+                  >
+                    <div className="relative">
+                      <img
+                        src={juriLogo}
+                        alt={`Logo Juri ${jid}`}
+                        className={`${
+                          selectionIds.length > 4 ? 'w-14 h-14 sm:w-16 sm:h-16' : 'w-20 h-20'
+                        } object-contain select-none transition-transform duration-150 ${
+                          isRestrictedJudge ? 'grayscale group-hover:grayscale-0' : 'group-hover:scale-110'
+                        }`}
+                      />
+                    </div>
+                    <div className="text-center space-y-1">
+                      <div
+                        className={`font-display text-xl sm:text-2xl font-extrabold tracking-wide transition-colors ${
+                          isRestrictedJudge ? 'text-slate-200 group-hover:text-yellow-300' : 'text-white group-hover:text-yellow-300'
+                        }`}
+                      >
+                        Juri {jid}
+                      </div>
+                      {isRestrictedJudge && (
+                        <div className="text-[11px] font-semibold text-amber-300/90 flex items-center justify-center gap-1">
+                          <Lock className="w-3 h-3 shrink-0" />
+                          <span>Terkunci · Login Password</span>
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </section>
         </main>
+        {unlockModalNode}
       </div>
     );
   }
@@ -226,11 +407,24 @@ export function JuriView({ onNavigate }: JuriViewProps) {
             onBack={() => onNavigate('landing')}
             showFullscreen
             leftBadge={
-              <div
-                data-testid="active-judge-badge"
-                className="px-3 sm:px-3.5 py-1.5 rounded-xl bg-yellow-400 text-black font-display text-xs sm:text-sm font-extrabold uppercase tracking-wider whitespace-nowrap shadow-md"
-              >
-                Juri {judgeId}
+              <div className="flex items-center gap-2">
+                <div
+                  data-testid="active-judge-badge"
+                  className="px-3 sm:px-3.5 py-1.5 rounded-xl bg-yellow-400 text-black font-display text-xs sm:text-sm font-extrabold uppercase tracking-wider whitespace-nowrap shadow-md"
+                >
+                  Juri {judgeId}
+                </div>
+                {!isFullJuriUnlocked && (
+                  <button
+                    type="button"
+                    data-testid="juri-active-unlock-btn"
+                    onClick={openUnlockModal}
+                    className="min-h-[32px] px-2.5 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-[11px] font-bold text-amber-200 flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                  >
+                    <Unlock className="w-3 h-3 shrink-0" />
+                    <span>Buka Semua Juri</span>
+                  </button>
+                )}
               </div>
             }
             rightBadge={
@@ -491,6 +685,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
             </button>
           </section>
         </main>
+        {unlockModalNode}
       </div>
     );
   }
@@ -561,11 +756,24 @@ export function JuriView({ onNavigate }: JuriViewProps) {
 
         {/* Top Judge Identity & Match Clock Strip */}
         <section className="shrink-0 rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 px-3.5 py-2.5 sm:px-5 sm:py-3 flex flex-wrap items-center justify-between gap-2.5">
-          <div
-            data-testid="active-judge-badge"
-            className="px-4 py-1.5 sm:py-2 rounded-xl bg-yellow-400 text-black font-display text-sm sm:text-lg font-extrabold uppercase tracking-wider flex items-center gap-2 shrink-0"
-          >
-            <span>Juri {judgeId}</span>
+          <div className="flex items-center gap-2">
+            <div
+              data-testid="active-judge-badge"
+              className="px-4 py-1.5 sm:py-2 rounded-xl bg-yellow-400 text-black font-display text-sm sm:text-lg font-extrabold uppercase tracking-wider flex items-center gap-2 shrink-0"
+            >
+              <span>Juri {judgeId}</span>
+            </div>
+            {!isFullJuriUnlocked && (
+              <button
+                type="button"
+                data-testid="juri-active-unlock-btn"
+                onClick={openUnlockModal}
+                className="min-h-[34px] px-2.5 py-1 rounded-lg bg-black/60 hover:bg-blue-950 border border-amber-400/60 text-xs font-bold text-amber-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              >
+                <Unlock className="w-3.5 h-3.5 shrink-0" />
+                <span>Buka Semua Juri</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2.5 sm:gap-3.5">
@@ -800,6 +1008,7 @@ export function JuriView({ onNavigate }: JuriViewProps) {
           </div>
         </div>
       )}
+      {unlockModalNode}
     </div>
   );
 }

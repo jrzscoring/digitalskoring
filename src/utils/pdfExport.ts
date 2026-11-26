@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { ArenaData, AthleteData, MatchData, MatchEvent } from '../types/silat';
+import type { ArenaCourt, ArenaData, AthleteData, MatchData, MatchEvent } from '../types/silat';
 import {
   computeCornerJurusSummary,
   ensureJurusState,
@@ -215,9 +215,10 @@ export function exportArenaSummaryPdf(
     theme: 'grid',
     styles: { fontSize: 8.5, cellPadding: 2.5 },
     headStyles: { fillColor: [30, 41, 59], textColor: 255 },
-    head: [['Partai', 'Kelas', 'Sudut Biru', 'Sudut Merah', 'Skor', 'Pemenang', 'Jenis Kemenangan']],
+    head: [['Partai', 'Gelanggang', 'Kelas', 'Sudut Biru', 'Sudut Merah', 'Skor', 'Pemenang', 'Jenis Kemenangan']],
     body: matches.map((m) => [
       `${m.matchNumber} (${m.stage})`,
+      `Gel. ${m.gelanggang || 'A'}`,
       m.weightClass,
       `${m.blueName}\n(${m.blueContingent})`,
       `${m.redName}\n(${m.redContingent})`,
@@ -368,9 +369,20 @@ function formatScheduleStatus(status: MatchData['status']): string {
   }
 }
 
-export function exportMatchSchedulePdf(arena: ArenaData, matches: MatchData[]): void {
+export function exportMatchSchedulePdf(
+  arena: ArenaData,
+  matches: MatchData[],
+  options?: { courtFilter?: ArenaCourt | 'Semua' }
+): void {
+  const courtFilter = options?.courtFilter && options.courtFilter !== 'Semua' ? options.courtFilter : undefined;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  drawLandscapeReportHeader(doc, arena, 'JADWAL PERTANDINGAN (KONTROL PARTAI)');
+  drawLandscapeReportHeader(
+    doc,
+    arena,
+    courtFilter
+      ? `JADWAL PERTANDINGAN — GELANGGANG ${courtFilter}`
+      : 'JADWAL PERTANDINGAN (KONTROL PARTAI)'
+  );
 
   autoTable(doc, {
     startY: 30,
@@ -380,6 +392,7 @@ export function exportMatchSchedulePdf(arena: ArenaData, matches: MatchData[]): 
     head: [
       [
         'No',
+        'Gelanggang',
         'Partai',
         'Babak / Fase',
         'Kelas / Kategori',
@@ -394,6 +407,7 @@ export function exportMatchSchedulePdf(arena: ArenaData, matches: MatchData[]): 
       matches.length > 0
         ? matches.map((m, idx) => [
             String(idx + 1),
+            `Gel. ${m.gelanggang || 'A'}`,
             m.matchNumber,
             m.stage,
             m.weightClass,
@@ -405,10 +419,11 @@ export function exportMatchSchedulePdf(arena: ArenaData, matches: MatchData[]): 
               ? `${formatMatchScore(m, 'blue')} - ${formatMatchScore(m, 'red')} (${m.winner === 'blue' ? 'BIRU' : m.winner === 'red' ? 'MERAH' : 'SERI'}${m.winMethod ? ` · ${m.winMethod}` : ''})`
               : `${formatMatchScore(m, 'blue')} - ${formatMatchScore(m, 'red')}`,
           ])
-        : [['-', '-', '-', 'Belum ada jadwal pertandingan', '-', '-', '-', '-', '-']],
+        : [['-', '-', '-', '-', 'Belum ada jadwal pertandingan', '-', '-', '-', '-', '-']],
   });
 
   const dateStamp = new Date().toISOString().slice(0, 10);
-  doc.save(`Jadwal_Pertandingan_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStamp}.pdf`);
+  const suffix = courtFilter ? `_Gelanggang_${courtFilter}` : '';
+  doc.save(`Jadwal_Pertandingan_${arena.name.replace(/[^a-zA-Z0-9_-]/g, '_')}${suffix}_${dateStamp}.pdf`);
 }
 

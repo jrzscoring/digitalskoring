@@ -10,11 +10,13 @@ import {
   GripVertical,
   ImagePlus,
   Layers,
+  LayoutGrid,
   Lock,
   Pencil,
   Play,
   Plus,
   RotateCcw,
+  Search,
   Shuffle,
   Trash2,
   Trophy,
@@ -45,9 +47,19 @@ import {
   TANDING_CLASSES_BY_AGE,
   downloadAthleteTemplateExcel,
   exportAthletesExcel,
+  exportMatchScheduleExcel,
   getClassOptions,
   parseAthletesExcel,
 } from '../utils/athleteExcel';
+import {
+  computeCourtDistribution,
+  getActiveCourtsForCount,
+  normalizeMatchCourt,
+  summarizeMatchesByCourt,
+  type CourtCount,
+  type CourtDivisionScope,
+  type CourtDivisionStrategy,
+} from '../utils/courtDistribution';
 import {
   JURUS_DEFAULT_DURATION_SEC,
   computeCornerJurusSummary,
@@ -67,7 +79,7 @@ import {
   type CornerRef,
   type LotingMatchDraft,
 } from '../utils/loting';
-import { exportMatchPdf } from '../utils/pdfExport';
+import { exportMatchPdf, exportMatchSchedulePdf } from '../utils/pdfExport';
 
 export function InputAtletPanel() {
   const {
@@ -1847,6 +1859,7 @@ export function KontrolPartaiPanel() {
   } = useArena();
 
   const [selectedMatchId, setSelectedMatchId] = useState<string>(activeMatch.id);
+  const [courtFilter, setCourtFilter] = useState<'Semua' | ArenaCourt>('Semua');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newCategory, setNewCategory] = useState<CompetitionCategory>('Jurus');
   const [newJurusType, setNewJurusType] = useState<JurusCategory>('Tunggal Baku');
@@ -1855,6 +1868,7 @@ export function KontrolPartaiPanel() {
   const [newTotalRounds, setNewTotalRounds] = useState<2 | 3>(3);
   const [newMatchNumber, setNewMatchNumber] = useState('');
   const [newStage, setNewStage] = useState('Final');
+  const [newGelanggang, setNewGelanggang] = useState<ArenaCourt>('A');
   const [newBlueName, setNewBlueName] = useState('');
   const [newBlueContingent, setNewBlueContingent] = useState('');
   const [newBlueCountry, setNewBlueCountry] = useState('IDN');
@@ -1877,9 +1891,14 @@ export function KontrolPartaiPanel() {
   const [editRedCountry, setEditRedCountry] = useState('IDN');
   const [editRedPhoto, setEditRedPhoto] = useState('');
 
+  const filteredMatches = useMemo(() => {
+    if (courtFilter === 'Semua') return matches;
+    return matches.filter((m) => normalizeMatchCourt(m.gelanggang) === courtFilter);
+  }, [matches, courtFilter]);
+
   const selectedMatch = useMemo(
-    () => matches.find((m) => m.id === selectedMatchId) || activeMatch,
-    [matches, selectedMatchId, activeMatch]
+    () => matches.find((m) => m.id === selectedMatchId) || filteredMatches[0] || activeMatch,
+    [matches, selectedMatchId, filteredMatches, activeMatch]
   );
 
   const openProfileEditor = () => {
@@ -1942,6 +1961,7 @@ export function KontrolPartaiPanel() {
         ? `${newJurusType} (${newGender})`
         : `${newTandingClass} (${newGender})`,
       stage: newStage.trim() || 'Final',
+      gelanggang: newGelanggang,
       competitionCategory: newCategory,
       jurusType: isJurus ? newJurusType : undefined,
       totalRounds: isJurus ? 1 : newTotalRounds,
@@ -1957,6 +1977,7 @@ export function KontrolPartaiPanel() {
       setAsActive: newSetActive,
     });
     setNewMatchNumber('');
+    setNewGelanggang('A');
     setNewBlueName('');
     setNewBlueContingent('');
     setNewBlueCountry('IDN');
@@ -2040,7 +2061,7 @@ export function KontrolPartaiPanel() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <div>
                 <label className="block text-[11px] text-blue-200 mb-1">Nomor Partai</label>
                 <input
@@ -2062,6 +2083,23 @@ export function KontrolPartaiPanel() {
                   maxLength={40}
                   className="w-full min-h-[36px] px-2.5 rounded-lg bg-black/70 border border-blue-500/45 text-xs text-white focus:outline-none focus:border-yellow-400"
                 />
+              </div>
+              <div>
+                <label htmlFor="new-match-gelanggang" className="block text-[11px] text-blue-200 mb-1">
+                  Gelanggang
+                </label>
+                <select
+                  id="new-match-gelanggang"
+                  value={newGelanggang}
+                  onChange={(e) => setNewGelanggang(e.target.value as ArenaCourt)}
+                  className="w-full min-h-[36px] px-2 rounded-lg bg-black/70 border border-blue-500/45 text-xs text-white focus:outline-none focus:border-yellow-400"
+                >
+                  {ARENA_COURTS.map((court) => (
+                    <option key={court} value={court}>
+                      Gelanggang {court}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -2343,6 +2381,23 @@ export function KontrolPartaiPanel() {
           )}
 
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label={`Ubah Gelanggang ${selectedMatch.matchNumber}`}
+              value={normalizeMatchCourt(selectedMatch.gelanggang)}
+              onChange={(e) =>
+                void updateMatchMeta(selectedMatch.id, {
+                  gelanggang: e.target.value as ArenaCourt,
+                })
+              }
+              className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-purple-500/55 text-xs font-semibold text-yellow-300 focus:outline-none focus:border-yellow-400"
+            >
+              {ARENA_COURTS.map((court) => (
+                <option key={court} value={court}>
+                  Gel. {court}
+                </option>
+              ))}
+            </select>
+
             {isSelectedJurus ? (
               <span className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-black/75 border border-yellow-400/50 text-xs font-mono font-semibold text-yellow-300 flex items-center">
                 {selectedMatch.roundDurationSec}s (TGRS · {selectedJurusJudgeCount} Juri)
@@ -2410,12 +2465,42 @@ export function KontrolPartaiPanel() {
           </div>
         </div>
 
+        {/* Filter Gelanggang Partai */}
+        <div className="flex items-center justify-between gap-2">
+          <label htmlFor="kontrol-partai-court-filter" className="text-xs font-medium text-blue-200">
+            Filter Gelanggang
+          </label>
+          <select
+            id="kontrol-partai-court-filter"
+            aria-label="Filter Gelanggang Kontrol Partai"
+            value={courtFilter}
+            onChange={(e) => setCourtFilter(e.target.value as 'Semua' | ArenaCourt)}
+            className="min-h-[34px] px-2.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs text-white focus:outline-none focus:border-yellow-400"
+          >
+            <option value="Semua">Semua Gelanggang ({matches.length})</option>
+            {ARENA_COURTS.map((court) => {
+              const count = matches.filter((m) => normalizeMatchCourt(m.gelanggang) === court).length;
+              return (
+                <option key={court} value={court}>
+                  Gelanggang {court} ({count})
+                </option>
+              );
+            })}
+          </select>
+        </div>
+
         {/* Daftar Pilihan Partai */}
         <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-          {matches.map((m) => {
+          {filteredMatches.length === 0 ? (
+            <div className="rounded-xl bg-black/55 border border-dashed border-purple-700/60 p-6 text-center text-xs text-blue-200">
+              Belum ada partai pada Gelanggang {courtFilter}. Gunakan menu <strong className="text-yellow-300">Pembagian Gelanggang</strong> untuk membagi partai ke gelanggang ini.
+            </div>
+          ) : (
+          filteredMatches.map((m) => {
             const isActive = m.id === activeMatch.id;
             const isSelected = m.id === selectedMatch.id;
             const mIsJurus = isJurusMatch(m);
+            const mCourt = normalizeMatchCourt(m.gelanggang);
             return (
               <button
                 key={m.id}
@@ -2433,6 +2518,9 @@ export function KontrolPartaiPanel() {
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div className="flex flex-wrap items-center gap-1.5 text-blue-200 min-w-0">
                     <span className="font-bold text-yellow-300">{m.matchNumber}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-purple-900/75 border border-purple-500/45 text-[10px] font-bold text-yellow-200">
+                      Gel. {mCourt}
+                    </span>
                     <span aria-hidden="true">&middot;</span>
                     <span>{m.stage}</span>
                     <span aria-hidden="true">&middot;</span>
@@ -2462,7 +2550,7 @@ export function KontrolPartaiPanel() {
                 </div>
               </button>
             );
-          })}
+          }))}
         </div>
       </section>
 
@@ -2479,7 +2567,7 @@ export function KontrolPartaiPanel() {
                 Preview {selectedMatch.matchNumber}
               </h3>
               <p className="text-xs text-blue-200">
-                {selectedMatch.stage} &middot; {selectedMatch.weightClass} &middot;{' '}
+                Gelanggang {normalizeMatchCourt(selectedMatch.gelanggang)} &middot; {selectedMatch.stage} &middot; {selectedMatch.weightClass} &middot;{' '}
                 {isSelectedJurus
                   ? `Kategori Jurus TGRS (${selectedJurusType})`
                   : `${selectedMatch.totalRounds ?? 3} Babak (Babak ${selectedMatch.currentRound})`}
@@ -2863,6 +2951,480 @@ export function KontrolPartaiPanel() {
             </div>
           )}
         </div>
+      </section>
+    </div>
+  );
+}
+
+const STRATEGY_DESCRIPTIONS: Record<CourtDivisionStrategy, string> = {
+  sequential:
+    'Membagi daftar partai secara berurutan menjadi blok seimbang ke tiap gelanggang (mis. Partai 1–5 di Gel. A, 6–10 di Gel. B).',
+  alternating:
+    'Membagi partai secara bergantian (selang-seling A, B, C, ...) agar beban tanding tiap gelanggang berjalan paralel.',
+  by_class:
+    'Menjaga partai dalam satu kelas / kategori tetap berada pada gelanggang yang sama sambil menyeimbangkan jumlah partai.',
+  from_athletes:
+    'Mengikuti kolom Gelanggang pada data registrasi atlet terdaftar, dan membagi sisanya secara merata ke gelanggang aktif.',
+};
+
+export function PembagianGelanggangPanel() {
+  const { arena, matches, activeMatch, athletes, assignMatchesGelanggang, setActiveMatch } = useArena();
+  const [courtCount, setCourtCount] = useState<CourtCount>(2);
+  const [strategy, setStrategy] = useState<CourtDivisionStrategy>('sequential');
+  const [scope, setScope] = useState<CourtDivisionScope>('unfinished');
+  const [filterCourt, setFilterCourt] = useState<'Semua' | ArenaCourt>('Semua');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isApplying, setIsApplying] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState('');
+
+  const activeCourts = useMemo(() => getActiveCourtsForCount(courtCount), [courtCount]);
+
+  const proposals = useMemo(
+    () =>
+      computeCourtDistribution({
+        matches,
+        athletes,
+        courtCount,
+        strategy,
+        scope,
+      }),
+    [matches, athletes, courtCount, strategy, scope]
+  );
+
+  const proposalPreviewCounts = useMemo(() => {
+    const counts = new Map<ArenaCourt, number>();
+    for (const c of activeCourts) counts.set(c, 0);
+    for (const p of proposals) {
+      counts.set(p.gelanggang, (counts.get(p.gelanggang) || 0) + 1);
+    }
+    return activeCourts.map((c) => ({ court: c, count: counts.get(c) || 0 }));
+  }, [activeCourts, proposals]);
+
+  const courtSummaries = useMemo(() => summarizeMatchesByCourt(matches, ARENA_COURTS), [matches]);
+
+  const displayedMatches = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return matches.filter((m) => {
+      if (filterCourt !== 'Semua' && normalizeMatchCourt(m.gelanggang) !== filterCourt) {
+        return false;
+      }
+      if (!q) return true;
+      return [
+        m.matchNumber,
+        m.stage,
+        m.weightClass,
+        m.blueName,
+        m.blueContingent,
+        m.redName,
+        m.redContingent,
+        `gelanggang ${normalizeMatchCourt(m.gelanggang)}`,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [matches, filterCourt, searchQuery]);
+
+  const handleApplyDistribution = async () => {
+    if (proposals.length === 0) {
+      setFeedbackMsg('Tidak ada partai yang sesuai cakupan untuk dibagi.');
+      return;
+    }
+    setIsApplying(true);
+    try {
+      const updatedCount = await assignMatchesGelanggang(
+        proposals.map((p) => ({ matchId: p.matchId, gelanggang: p.gelanggang }))
+      );
+      const summaryText = proposalPreviewCounts
+        .map((c) => `Gel. ${c.court}: ${c.count} partai`)
+        .join(' · ');
+      setFeedbackMsg(
+        updatedCount > 0
+          ? `Pembagian ${courtCount} Gelanggang diterapkan (${updatedCount} partai diperbarui). Distribusi target: ${summaryText}.`
+          : `Seluruh ${proposals.length} partai target sudah berada pada posisi distribusi tersebut (${summaryText}).`
+      );
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  const handleSingleCourtChange = async (matchId: string, nextCourt: ArenaCourt) => {
+    const target = matches.find((m) => m.id === matchId);
+    const updated = await assignMatchesGelanggang([{ matchId, gelanggang: nextCourt }]);
+    if (updated > 0 && target) {
+      setFeedbackMsg(`${target.matchNumber} dipindahkan ke Gelanggang ${nextCourt}.`);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <section
+        aria-label="Pembagian Data Partai Multi-Gelanggang"
+        data-testid="pembagian-gelanggang-panel"
+        className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-4 sm:p-5 space-y-4"
+      >
+        {/* Header + Export */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3.5 border-b border-purple-800/60">
+          <div className="flex items-start gap-2.5">
+            <LayoutGrid className="w-6 h-6 text-yellow-300 shrink-0 mt-0.5" />
+            <div>
+              <h2 className="font-display text-xl font-bold text-yellow-300">
+                Pembagian Partai Multi-Gelanggang
+              </h2>
+              <p className="text-xs text-blue-200 mt-0.5">
+                Bagi data partai ke 2, 3, atau 4 gelanggang menggunakan menu dropdown di bawah, lalu sesuaikan tiap partai bila perlu.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={displayedMatches.length === 0}
+              onClick={() => exportMatchSchedulePdf(arena, displayedMatches, { courtFilter: filterCourt })}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-45 disabled:cursor-not-allowed text-black font-bold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
+            >
+              <FileDown className="w-4 h-4" />
+              <span>
+                {filterCourt === 'Semua' ? 'Unduh PDF Semua' : `Unduh PDF Gel. ${filterCourt}`}
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={displayedMatches.length === 0}
+              onClick={() => exportMatchScheduleExcel(displayedMatches, arena, { courtFilter: filterCourt })}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-blue-950/80 hover:bg-blue-900 disabled:opacity-45 disabled:cursor-not-allowed border border-blue-500/45 hover:border-yellow-400 text-white font-semibold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-yellow-300" />
+              <span>
+                {filterCourt === 'Semua' ? 'Unduh Excel Semua' : `Unduh Excel Gel. ${filterCourt}`}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Dropdown Pengaturan Pembagian Gelanggang */}
+        <div className="rounded-xl bg-black/60 border border-blue-500/45 p-3.5 sm:p-4 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-3">
+              <label
+                htmlFor="bagi-gelanggang-count"
+                className="block text-[11px] font-semibold text-blue-200 mb-1"
+              >
+                Jumlah Gelanggang Aktif
+              </label>
+              <select
+                id="bagi-gelanggang-count"
+                data-testid="bagi-gelanggang-count-select"
+                value={courtCount}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setCourtCount(val === 4 ? 4 : val === 3 ? 3 : 2);
+                  setFeedbackMsg('');
+                }}
+                className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-[#090315] border border-blue-500/50 text-xs sm:text-sm font-semibold text-white focus:outline-none focus:border-yellow-400 cursor-pointer"
+              >
+                <option value={2}>2 Gelanggang (A &amp; B)</option>
+                <option value={3}>3 Gelanggang (A, B &amp; C)</option>
+                <option value={4}>4 Gelanggang (A, B, C &amp; D)</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-4">
+              <label
+                htmlFor="bagi-gelanggang-strategy"
+                className="block text-[11px] font-semibold text-blue-200 mb-1"
+              >
+                Metode Pembagian Partai
+              </label>
+              <select
+                id="bagi-gelanggang-strategy"
+                data-testid="bagi-gelanggang-strategy-select"
+                value={strategy}
+                onChange={(e) => {
+                  setStrategy(e.target.value as CourtDivisionStrategy);
+                  setFeedbackMsg('');
+                }}
+                className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-[#090315] border border-blue-500/50 text-xs sm:text-sm font-semibold text-white focus:outline-none focus:border-yellow-400 cursor-pointer"
+              >
+                <option value="sequential">Bagi Rata Berurutan (Blok Partai)</option>
+                <option value="alternating">Bagi Selang-Seling (Bergantian A-B-...)</option>
+                <option value="by_class">Bagi Per Kelas / Kategori</option>
+                <option value="from_athletes">Sesuai Gelanggang Atlet Terdaftar</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-3">
+              <label
+                htmlFor="bagi-gelanggang-scope"
+                className="block text-[11px] font-semibold text-blue-200 mb-1"
+              >
+                Cakupan Data Partai
+              </label>
+              <select
+                id="bagi-gelanggang-scope"
+                data-testid="bagi-gelanggang-scope-select"
+                value={scope}
+                onChange={(e) => {
+                  setScope(e.target.value as CourtDivisionScope);
+                  setFeedbackMsg('');
+                }}
+                className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-[#090315] border border-blue-500/50 text-xs sm:text-sm font-semibold text-white focus:outline-none focus:border-yellow-400 cursor-pointer"
+              >
+                <option value="unfinished">Partai Belum Selesai</option>
+                <option value="waiting">Hanya Partai Menunggu</option>
+                <option value="all">Semua Partai ({matches.length})</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <button
+                type="button"
+                disabled={isApplying || proposals.length === 0}
+                data-testid="bagi-gelanggang-apply-btn"
+                onClick={() => void handleApplyDistribution()}
+                className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-45 disabled:cursor-not-allowed text-black font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Check className="w-4 h-4 shrink-0" />
+                <span>{isApplying ? 'Membagi...' : 'Terapkan'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-purple-800/50 text-[11px]">
+            <p className="text-blue-200/90">{STRATEGY_DESCRIPTIONS[strategy]}</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-blue-300 font-medium">Rencana ({proposals.length} partai):</span>
+              {proposalPreviewCounts.map((item) => (
+                <span
+                  key={item.court}
+                  className="px-2 py-0.5 rounded bg-blue-950/85 border border-blue-500/45 font-mono font-bold text-yellow-300"
+                >
+                  Gel. {item.court}: {item.count}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {feedbackMsg && (
+          <div
+            role="status"
+            data-testid="bagi-gelanggang-feedback"
+            className="rounded-xl bg-emerald-950/75 border border-emerald-400/60 px-3.5 py-2.5 text-xs text-emerald-100 font-medium"
+          >
+            {feedbackMsg}
+          </div>
+        )}
+
+        {/* Ringkasan Kartu Per Gelanggang */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {courtSummaries.map((entry) => {
+            const isSelectedFilter = filterCourt === entry.court;
+            const isActiveSetupCourt = activeCourts.includes(entry.court);
+            const courtMatches = matches.filter(
+              (m) => normalizeMatchCourt(m.gelanggang) === entry.court
+            );
+            return (
+              <div
+                key={entry.court}
+                data-testid={`court-summary-card-${entry.court}`}
+                className={`rounded-xl border p-3 space-y-2 transition-colors ${
+                  isSelectedFilter
+                    ? 'bg-yellow-400/15 border-yellow-400'
+                    : isActiveSetupCourt || entry.total > 0
+                    ? 'bg-black/60 border-purple-700/60'
+                    : 'bg-black/35 border-purple-900/40 opacity-65'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilterCourt((prev) => (prev === entry.court ? 'Semua' : entry.court))
+                    }
+                    className="text-left cursor-pointer"
+                  >
+                    <div className="font-display text-base font-bold text-yellow-300">
+                      Gelanggang {entry.court}
+                    </div>
+                    <div className="text-[11px] font-mono text-white">
+                      {entry.total} Partai terdaftar
+                    </div>
+                  </button>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                      isActiveSetupCourt
+                        ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-300'
+                        : 'bg-black/50 border-purple-700/50 text-blue-300/70'
+                    }`}
+                  >
+                    {isActiveSetupCourt ? 'Aktif' : 'Cadangan'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] font-mono text-blue-200/90 border-t border-purple-800/45 pt-1.5">
+                  <span>Tunggu: {entry.waiting}</span>
+                  <span>Main: {entry.running}</span>
+                  <span>Selesai: {entry.finished}</span>
+                </div>
+
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    disabled={courtMatches.length === 0}
+                    onClick={() =>
+                      exportMatchSchedulePdf(arena, courtMatches, { courtFilter: entry.court })
+                    }
+                    className="flex-1 min-h-[28px] px-2 rounded-lg bg-blue-950/85 hover:bg-yellow-400 hover:text-black disabled:opacity-35 disabled:cursor-not-allowed border border-blue-500/45 text-[10px] font-bold text-white cursor-pointer transition-colors"
+                  >
+                    PDF Gel. {entry.court}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={courtMatches.length === 0}
+                    onClick={() =>
+                      exportMatchScheduleExcel(courtMatches, arena, { courtFilter: entry.court })
+                    }
+                    className="flex-1 min-h-[28px] px-2 rounded-lg bg-blue-950/85 hover:bg-blue-800 disabled:opacity-35 disabled:cursor-not-allowed border border-blue-500/45 text-[10px] font-bold text-yellow-300 cursor-pointer transition-colors"
+                  >
+                    Excel Gel. {entry.court}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Filter & Pencarian Daftar Partai */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 pt-1">
+          <div className="md:col-span-8 relative">
+            <Search className="w-4 h-4 text-blue-300 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Cari partai pada pembagian gelanggang"
+              placeholder="Cari nomor partai, kelas, pesilat, atau kontingen..."
+              className="w-full min-h-[38px] pl-9 pr-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs sm:text-sm text-white placeholder:text-blue-300/60 focus:outline-none focus:border-yellow-400"
+            />
+          </div>
+          <div className="md:col-span-4">
+            <select
+              aria-label="Filter tampilan gelanggang"
+              data-testid="bagi-gelanggang-filter-select"
+              value={filterCourt}
+              onChange={(e) => setFilterCourt(e.target.value as 'Semua' | ArenaCourt)}
+              className="w-full min-h-[38px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-xs sm:text-sm text-white focus:outline-none focus:border-yellow-400 cursor-pointer"
+            >
+              <option value="Semua">Semua Gelanggang ({matches.length} Partai)</option>
+              {ARENA_COURTS.map((court) => {
+                const cnt = matches.filter((m) => normalizeMatchCourt(m.gelanggang) === court).length;
+                return (
+                  <option key={court} value={court}>
+                    Gelanggang {court} ({cnt} Partai)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        </div>
+
+        {/* Tabel Partai dengan Dropdown Gelanggang Manual per Partai */}
+        {displayedMatches.length === 0 ? (
+          <div className="rounded-xl bg-black/55 border border-dashed border-purple-700/60 p-8 text-center text-xs sm:text-sm text-blue-200">
+            Tidak ada partai pertandingan yang sesuai dengan filter saat ini.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-purple-700/50">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-blue-950/80 text-yellow-300 text-[11px] uppercase font-bold border-b border-purple-700/60">
+                  <th className="py-2.5 px-3 w-10 text-center">No</th>
+                  <th className="py-2.5 px-3">Partai</th>
+                  <th className="py-2.5 px-3">Kelas / Kategori</th>
+                  <th className="py-2.5 px-3">Sudut Biru vs Sudut Merah</th>
+                  <th className="py-2.5 px-3 text-center">Status</th>
+                  <th className="py-2.5 px-3 text-center">Gelanggang</th>
+                  <th className="py-2.5 px-3 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-purple-800/50 bg-black/55">
+                {displayedMatches.map((m, idx) => {
+                  const isActive = m.id === activeMatch.id;
+                  const currentCourt = normalizeMatchCourt(m.gelanggang);
+                  return (
+                    <tr
+                      key={m.id}
+                      className={`transition-colors ${
+                        isActive ? 'bg-blue-950/45' : 'hover:bg-blue-950/25'
+                      }`}
+                    >
+                      <td className="py-2 px-3 text-center font-mono text-blue-200 tabular-nums">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        <div className="font-bold text-yellow-300">{m.matchNumber}</div>
+                        <div className="text-[11px] text-blue-200">{m.stage}</div>
+                      </td>
+                      <td className="py-2 px-3 text-blue-100">
+                        <div className="font-medium text-white">{m.weightClass}</div>
+                        <div className="text-[10px] text-blue-300">
+                          {isJurusMatch(m) ? `Jurus · ${getJurusType(m)}` : `${m.totalRounds ?? 3} Babak`}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-semibold text-blue-300">{m.blueName}</span>
+                          <span className="text-blue-200/75 text-[11px]">({m.blueContingent})</span>
+                          <span className="text-yellow-300 font-mono text-[10px]">vs</span>
+                          <span className="font-semibold text-red-300">{m.redName}</span>
+                          <span className="text-red-200/75 text-[11px]">({m.redContingent})</span>
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 text-center whitespace-nowrap">
+                        <span className="px-2 py-0.5 rounded bg-black/60 border border-purple-600/60 font-mono text-[10px] uppercase text-white">
+                          {getMatchStatusLabel(m.status)}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-center whitespace-nowrap">
+                        <select
+                          aria-label={`Gelanggang ${m.matchNumber}`}
+                          data-testid={`match-court-select-${m.id}`}
+                          value={currentCourt}
+                          onChange={(e) =>
+                            void handleSingleCourtChange(m.id, e.target.value as ArenaCourt)
+                          }
+                          className="min-h-[32px] px-2.5 py-1 rounded-lg bg-[#090315] border border-yellow-400/60 text-xs font-bold text-yellow-300 focus:outline-none focus:border-white cursor-pointer"
+                        >
+                          {ARENA_COURTS.map((court) => (
+                            <option key={court} value={court}>
+                              Gelanggang {court}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2 px-3 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          disabled={isActive}
+                          onClick={() => void setActiveMatch(m.id)}
+                          className={`min-h-[30px] px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                            isActive
+                              ? 'bg-yellow-400 text-black cursor-default'
+                              : 'bg-blue-950/85 hover:bg-blue-800 border border-blue-500/45 text-white cursor-pointer'
+                          }`}
+                        >
+                          {isActive ? 'Aktif' : 'Aktifkan'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );

@@ -1,7 +1,13 @@
 import { getApps, initializeApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getDatabase, type Database } from 'firebase/database';
-import { doc, getDocFromServer, getFirestore, type Firestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+  type Firestore,
+} from 'firebase/firestore';
 import appletConfig from '../../firebase-applet-config.json';
 
 export interface WindowFirebaseConfig extends FirebaseOptions {
@@ -47,13 +53,29 @@ const appletApp: FirebaseApp = hasSeparateAppletProject
     initializeApp(appletConfig, 'aistudio-firestore')
   : firebaseApp;
 
-export const db: Firestore = appletConfig.firestoreDatabaseId
-  ? getFirestore(appletApp, appletConfig.firestoreDatabaseId)
-  : getFirestore(appletApp);
+function createFirestoreInstance(app: FirebaseApp, databaseId?: string): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalForceLongPolling: true,
+      },
+      databaseId
+    );
+  } catch {
+    return databaseId ? getFirestore(app, databaseId) : getFirestore(app);
+  }
+}
 
-export const userFirestore: Firestore = getFirestore(firebaseApp);
+export const db: Firestore = createFirestoreInstance(
+  appletApp,
+  appletConfig.firestoreDatabaseId || undefined
+);
+
+export const userFirestore: Firestore = createFirestoreInstance(firebaseApp);
 export const auth = getAuth(appletApp);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 let rtdbInstance: Database | null = null;
 let rtdbProjectId: string | null = null;
@@ -123,6 +145,19 @@ export function handleFirestoreError(
 }
 
 async function testConnection(): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    if (typeof window !== 'undefined') {
+      window.addEventListener(
+        'online',
+        () => {
+          void testConnection();
+        },
+        { once: true }
+      );
+    }
+    return;
+  }
+
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {

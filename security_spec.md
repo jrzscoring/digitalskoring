@@ -6,6 +6,7 @@
 3. **Terminal State Locking**: Once a `Match` reaches `status == 'finished'`, scoring/timer mutations are rejected unless explicitly reopened/reset by the arena owner (`ownerId`).
 4. **Temporal & Structural Integrity**: All `createdAt` and `updatedAt` fields must equal `request.time`. All string fields enforce explicit `.size()` boundaries, and all document IDs match `^[a-zA-Z0-9_\-]+$`.
 5. **No Ghost Fields**: Every `create` checks `hasAll` + `hasOnly`, and every `update` uses action-based `affectedKeys().hasOnly(...)` combined with `isValid[Entity](incoming())`.
+6. **PII Isolation & Immutable Login Audit**: `/users/{userId}` stores email and official credentials restricted strictly to `isOwner(userId) || isAdmin()`, with immutable `uid`, `email`, and `createdAt`. `/users/{userId}/loginLogs/{logId}` is append-only (`allow update, delete: if false`) and bound to `request.auth.uid` and `request.auth.token.email_verified == true`.
 
 ## 2. Adversarial Test Payloads ("Dirty Dozen")
 1. **Unauthenticated Arena Create**: `{ id: "arena1", name: "Gelanggang A", ... }` without auth -> `PERMISSION_DENIED`.
@@ -19,4 +20,4 @@
 9. **Terminal State Bypass**: Non-owner operator attempts to mutate `blueScore` after `status == 'finished'` -> `PERMISSION_DENIED`.
 10. **Value Poisoning**: Updating `blueScore` to a string `"999"` or `status` to `"hacked"` -> `PERMISSION_DENIED`.
 11. **Orphan Match Creation**: Creating `/arenas/nonexistent/matches/m1` -> `PERMISSION_DENIED`.
-12. **Privilege Escalation**: Non-owner adds themselves to `/arenas/{arenaId}/operators/{uid}` -> `PERMISSION_DENIED`.
+12. **Privilege Escalation & Cross-User PII Read**: Non-owner adds themselves to `/arenas/{arenaId}/operators/{uid}` or reads `/users/{otherUid}` -> `PERMISSION_DENIED`.

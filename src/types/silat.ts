@@ -117,6 +117,7 @@ export interface MatchData {
   matchNumber: string;
   weightClass: string;
   stage: string;
+  gelanggang?: ArenaCourt;
   competitionCategory?: CompetitionCategory;
   jurusType?: JurusCategory;
   jurusJudgeCount?: number;
@@ -152,6 +153,8 @@ export interface MatchData {
   redTeguran1: number;
   redTeguran2: number;
   redPeringatan: number;
+  blueProtests?: number;
+  redProtests?: number;
   judge1Vote?: JudgeVote;
   judge2Vote?: JudgeVote;
   judge3Vote?: JudgeVote;
@@ -244,3 +247,45 @@ export interface MatchEvent {
   createdAt?: unknown;
   createdAtMs?: number;
 }
+
+export type OfficialStationRole = 'Sekretaris' | 'Dewan' | 'Timer' | 'Juri' | 'Scoreboard';
+
+export interface UserOfficialProfile {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  licenseNumber?: string;
+  contingentOrigin?: string;
+  preferredRole: OfficialStationRole;
+  preferredCourt: ArenaCourt;
+  preferredJudgeNumber?: number;
+  lastArenaId?: string;
+  onboardingCompleted: boolean;
+  lastLoginAt?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface LoginAuditEntry {
+  id: string;
+  uid: string;
+  email: string;
+  deviceLabel: string;
+  stationRole: OfficialStationRole;
+  court: ArenaCourt;
+  arenaId: string;
+  loginAtMs: number;
+  createdAt?: unknown;
+}
+
+export interface ArenaOperatorRecord {
+  uid: string;
+  arenaId: string;
+  ownerId: string;
+  role: OfficialStationRole;
+  displayName?: string;
+  email?: string;
+  createdAt?: unknown;
+}
+

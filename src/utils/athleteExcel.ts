@@ -460,11 +460,17 @@ function formatExcelMatchStatus(status: MatchData['status']): string {
   }
 }
 
-export function exportMatchScheduleExcel(matches: MatchData[], arena?: ArenaData): void {
+export function exportMatchScheduleExcel(
+  matches: MatchData[],
+  arena?: ArenaData,
+  options?: { courtFilter?: ArenaCourt | 'Semua' }
+): void {
   const wb = XLSX.utils.book_new();
+  const courtFilter = options?.courtFilter && options.courtFilter !== 'Semua' ? options.courtFilter : undefined;
 
   const rows = matches.map((m, idx) => ({
     No: idx + 1,
+    Gelanggang: `Gelanggang ${m.gelanggang || 'A'}`,
     Partai: m.matchNumber,
     'Babak / Fase': m.stage,
     'Kelas / Kategori': m.weightClass,
@@ -490,6 +496,7 @@ export function exportMatchScheduleExcel(matches: MatchData[], arena?: ArenaData
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [
     { wch: 6 },
+    { wch: 15 },
     { wch: 14 },
     { wch: 16 },
     { wch: 26 },
@@ -505,9 +512,14 @@ export function exportMatchScheduleExcel(matches: MatchData[], arena?: ArenaData
     { wch: 22 },
   ];
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Jadwal Pertandingan');
+  XLSX.utils.book_append_sheet(
+    wb,
+    ws,
+    courtFilter ? `Jadwal Gelanggang ${courtFilter}` : 'Jadwal Pertandingan'
+  );
   const dateStamp = new Date().toISOString().slice(0, 10);
   const arenaSlug = arena?.name ? arena.name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Gelanggang';
-  XLSX.writeFile(wb, `jadwal-pertandingan-${arenaSlug}-${dateStamp}.xlsx`);
+  const courtSlug = courtFilter ? `-gelanggang-${courtFilter}` : '';
+  XLSX.writeFile(wb, `jadwal-pertandingan-${arenaSlug}${courtSlug}-${dateStamp}.xlsx`);
 }
 

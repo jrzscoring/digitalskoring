@@ -387,10 +387,12 @@ export function JadwalPertandinganPanel() {
   const { arena, matches, activeMatch } = useArena();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Semua' | 'waiting' | 'running' | 'finished'>('Semua');
+  const [courtFilter, setCourtFilter] = useState<'Semua' | ArenaCourt>('Semua');
 
   const filteredMatches = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return matches.filter((m) => {
+      if (courtFilter !== 'Semua' && (m.gelanggang || 'A') !== courtFilter) return false;
       if (statusFilter === 'waiting' && m.status !== 'waiting') return false;
       if (statusFilter === 'running' && m.status !== 'active' && m.status !== 'paused' && m.status !== 'break') {
         return false;
@@ -405,12 +407,13 @@ export function JadwalPertandinganPanel() {
         m.blueContingent,
         m.redName,
         m.redContingent,
+        `gelanggang ${m.gelanggang || 'A'}`,
       ]
         .join(' ')
         .toLowerCase()
         .includes(q);
     });
-  }, [matches, searchQuery, statusFilter]);
+  }, [matches, searchQuery, statusFilter, courtFilter]);
 
   return (
     <section className="rounded-2xl bg-[#0d051c]/90 border border-purple-700/60 p-5 space-y-5">
@@ -431,7 +434,7 @@ export function JadwalPertandinganPanel() {
           <button
             type="button"
             disabled={filteredMatches.length === 0}
-            onClick={() => exportMatchSchedulePdf(arena, filteredMatches)}
+            onClick={() => exportMatchSchedulePdf(arena, filteredMatches, { courtFilter })}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-45 disabled:cursor-not-allowed text-black font-bold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap transition-colors"
           >
             <FileDown className="w-4 h-4" />
@@ -440,7 +443,7 @@ export function JadwalPertandinganPanel() {
           <button
             type="button"
             disabled={filteredMatches.length === 0}
-            onClick={() => exportMatchScheduleExcel(filteredMatches, arena)}
+            onClick={() => exportMatchScheduleExcel(filteredMatches, arena, { courtFilter })}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-950/80 hover:bg-blue-900 disabled:opacity-45 disabled:cursor-not-allowed border border-blue-500/45 hover:border-yellow-400 text-white font-semibold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap transition-colors"
           >
             <FileSpreadsheet className="w-4 h-4 text-yellow-300" />
@@ -449,9 +452,9 @@ export function JadwalPertandinganPanel() {
         </div>
       </div>
 
-      {/* Search & Status Filter */}
+      {/* Search, Status & Gelanggang Filter */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-        <div className="md:col-span-8 relative">
+        <div className="md:col-span-6 relative">
           <Search className="w-4 h-4 text-blue-300 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
@@ -462,7 +465,22 @@ export function JadwalPertandinganPanel() {
             className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-sm text-white placeholder:text-blue-300/60 focus:outline-none focus:border-yellow-400"
           />
         </div>
-        <div className="md:col-span-4">
+        <div className="md:col-span-3">
+          <select
+            aria-label="Filter gelanggang jadwal pertandingan"
+            value={courtFilter}
+            onChange={(e) => setCourtFilter(e.target.value as 'Semua' | ArenaCourt)}
+            className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-black/65 border border-blue-500/45 text-sm text-white focus:outline-none focus:border-yellow-400"
+          >
+            <option value="Semua">Semua Gelanggang</option>
+            {ARENA_COURTS.map((c) => (
+              <option key={c} value={c}>
+                Gelanggang {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="md:col-span-3">
           <select
             aria-label="Filter status jadwal pertandingan"
             value={statusFilter}
@@ -489,6 +507,7 @@ export function JadwalPertandinganPanel() {
             <thead>
               <tr className="bg-blue-950/80 text-yellow-300 text-xs uppercase font-bold border-b border-purple-700/60">
                 <th className="py-3 px-3 w-12 text-center">No</th>
+                <th className="py-3 px-3 text-center">Gel.</th>
                 <th className="py-3 px-3">Partai</th>
                 <th className="py-3 px-3">Fase</th>
                 <th className="py-3 px-3">Kelas / Kategori</th>
@@ -511,6 +530,9 @@ export function JadwalPertandinganPanel() {
                   >
                     <td className="py-2.5 px-3 text-center font-mono text-blue-200 tabular-nums">
                       {idx + 1}
+                    </td>
+                    <td className="py-2.5 px-3 text-center font-mono font-bold text-yellow-300 whitespace-nowrap">
+                      Gel. {m.gelanggang || 'A'}
                     </td>
                     <td className="py-2.5 px-3 font-bold text-yellow-300 whitespace-nowrap">
                       {m.matchNumber}

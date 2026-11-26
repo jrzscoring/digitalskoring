@@ -33,7 +33,14 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+      return isVerifiedUser() && (
+        request.auth.token.email == 'dmenterior@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
     }
 
     function arenaDoc(arenaId) {
@@ -77,11 +84,57 @@ service cloud.firestore {
 
     function isValidOperator(data) {
       return data.keys().hasAll(['uid', 'arenaId', 'ownerId', 'role', 'createdAt'])
-        && data.keys().hasOnly(['uid', 'arenaId', 'ownerId', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'arenaId', 'ownerId', 'role', 'displayName', 'email', 'createdAt'])
         && isValidUid(data.uid)
         && isValidId(data.arenaId)
         && isValidUid(data.ownerId)
         && data.role in ['Sekretaris', 'Dewan', 'Timer', 'Juri', 'Scoreboard']
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 80))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 160))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'preferredRole', 'preferredCourt',
+          'onboardingCompleted', 'lastLoginAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'photoURL', 'licenseNumber', 'contingentOrigin',
+          'preferredRole', 'preferredCourt', 'preferredJudgeNumber', 'lastArenaId',
+          'onboardingCompleted', 'lastLoginAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidUid(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('licenseNumber' in data) || (data.licenseNumber is string && data.licenseNumber.size() <= 48))
+        && (!('contingentOrigin' in data) || (data.contingentOrigin is string && data.contingentOrigin.size() <= 80))
+        && data.preferredRole in ['Sekretaris', 'Dewan', 'Timer', 'Juri', 'Scoreboard']
+        && data.preferredCourt in ['A', 'B', 'C', 'D']
+        && (!('preferredJudgeNumber' in data) || (data.preferredJudgeNumber is int && data.preferredJudgeNumber >= 1 && data.preferredJudgeNumber <= 10))
+        && (!('lastArenaId' in data) || (data.lastArenaId is string && data.lastArenaId.size() <= 64))
+        && data.onboardingCompleted is bool
+        && data.lastLoginAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLoginLog(data) {
+      return data.keys().hasAll([
+          'id', 'uid', 'email', 'deviceLabel', 'stationRole', 'court', 'arenaId', 'loginAtMs', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'uid', 'email', 'deviceLabel', 'stationRole', 'court', 'arenaId', 'loginAtMs', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidUid(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.deviceLabel is string && data.deviceLabel.size() >= 1 && data.deviceLabel.size() <= 120
+        && data.stationRole in ['Sekretaris', 'Dewan', 'Timer', 'Juri', 'Scoreboard']
+        && data.court in ['A', 'B', 'C', 'D']
+        && isValidId(data.arenaId)
+        && data.loginAtMs is int && data.loginAtMs >= 0
         && data.createdAt is timestamp;
     }
 
@@ -172,7 +225,7 @@ service cloud.firestore {
           'redTeguran2', 'redPeringatan', 'winner', 'winMethod', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage',
+          'id', 'arenaId', 'ownerId', 'matchNumber', 'weightClass', 'stage', 'gelanggang',
           'competitionCategory', 'jurusType', 'jurusJudgeCount', 'activePerformerCorner', 'jurusState',
           'blueName', 'blueContingent', 'blueCountry', 'bluePhoto',
           'redName', 'redContingent', 'redCountry', 'redPhoto',
@@ -180,7 +233,8 @@ service cloud.firestore {
           'blueScore', 'redScore', 'bluePunches', 'blueKicks', 'blueFalls',
           'blueBinaan', 'blueTeguran1', 'blueTeguran2', 'bluePeringatan',
           'redPunches', 'redKicks', 'redFalls', 'redBinaan', 'redTeguran1',
-          'redTeguran2', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote', 'verification', 'juriLocked',
+          'redTeguran2', 'redPeringatan', 'blueProtests', 'redProtests',
+          'judge1Vote', 'judge2Vote', 'judge3Vote', 'verification', 'juriLocked',
           'winner', 'winMethod', 'finishedAtMs', 'createdAt', 'updatedAt'
         ]);
     }
@@ -192,6 +246,7 @@ service cloud.firestore {
         && data.matchNumber is string && data.matchNumber.size() >= 1 && data.matchNumber.size() <= 32
         && data.weightClass is string && data.weightClass.size() >= 1 && data.weightClass.size() <= 80
         && data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 40
+        && (!('gelanggang' in data) || data.gelanggang in ['A', 'B', 'C', 'D'])
         && (!('competitionCategory' in data) || data.competitionCategory in ['Tanding', 'Jurus'])
         && (!('jurusType' in data) || data.jurusType in ['Tunggal Baku', 'Ganda', 'Regu', 'Tunggal Bebas'])
         && (!('jurusJudgeCount' in data) || (data.jurusJudgeCount is int && data.jurusJudgeCount >= 3 && data.jurusJudgeCount <= 10))
@@ -229,7 +284,9 @@ service cloud.firestore {
         && data.redBinaan is int && data.redBinaan >= 0 && data.redBinaan <= 20
         && data.redTeguran1 is int && data.redTeguran1 >= 0 && data.redTeguran1 <= 20
         && data.redTeguran2 is int && data.redTeguran2 >= 0 && data.redTeguran2 <= 20
-        && data.redPeringatan is int && data.redPeringatan >= 0 && data.redPeringatan <= 3;
+        && data.redPeringatan is int && data.redPeringatan >= 0 && data.redPeringatan <= 3
+        && (!('blueProtests' in data) || (data.blueProtests is int && data.blueProtests >= 0 && data.blueProtests <= 2))
+        && (!('redProtests' in data) || (data.redProtests is int && data.redProtests >= 0 && data.redProtests <= 2));
     }
 
     function isValidMatchState(data) {
@@ -345,6 +402,46 @@ service cloud.firestore {
       allow get: if isVerifiedUser() && request.auth.uid == adminUid;
     }
 
+    match /users/{userId} {
+      allow get: if isValidUid(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerifiedUser() && (
+        resource.data.uid == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidUid(userId) && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && incoming().email == request.auth.token.email
+        && incoming().lastLoginAt == request.time
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidUid(userId) && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'licenseNumber', 'contingentOrigin',
+          'preferredRole', 'preferredCourt', 'preferredJudgeNumber', 'lastArenaId',
+          'onboardingCompleted', 'lastLoginAt', 'updatedAt'
+        ]);
+      allow delete: if isValidUid(userId) && isAdmin();
+
+      match /loginLogs/{logId} {
+        allow get: if isValidUid(userId) && isValidId(logId) && (isOwner(userId) || isAdmin());
+        allow list: if isVerifiedUser() && (
+          resource.data.uid == request.auth.uid || isAdmin()
+        );
+        allow create: if isValidUid(userId) && isValidId(logId) && isOwner(userId)
+          && isValidLoginLog(incoming())
+          && incoming().id == logId
+          && incoming().uid == userId
+          && incoming().email == request.auth.token.email
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
     match /arenas/{arenaId} {
       allow get: if isValidId(arenaId) && isVerifiedUser() && (
         existing().ownerId == request.auth.uid || isArenaOperator(arenaId) || isAdmin()
@@ -380,15 +477,23 @@ service cloud.firestore {
           request.auth.uid == operatorUid || isArenaOwner(arenaId) || isAdmin()
         );
         allow list: if isVerifiedUser() && (
-          resource.data.ownerId == request.auth.uid || isAdmin()
+          resource.data.ownerId == request.auth.uid || resource.data.uid == request.auth.uid || isAdmin()
         );
         allow create: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser()
           && isValidOperator(incoming())
           && incoming().uid == operatorUid
           && incoming().arenaId == arenaId
           && incoming().createdAt == request.time
-          && isArenaOwner(arenaId)
+          && (isArenaOwner(arenaId) || isAdmin())
           && incoming().ownerId == arenaDoc(arenaId).data.ownerId;
+        allow update: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser()
+          && isValidOperator(incoming())
+          && incoming().uid == existing().uid
+          && incoming().arenaId == existing().arenaId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && (isArenaOwner(arenaId) || isAdmin())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'email']);
         allow delete: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser() && (
           isArenaOwner(arenaId) || isAdmin()
         );
@@ -480,7 +585,7 @@ service cloud.firestore {
             (
               (isArenaOwner(arenaId) || (existing().status != 'finished' && isArenaOperator(arenaId))) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
-                'matchNumber', 'weightClass', 'stage', 'competitionCategory', 'jurusType', 'jurusJudgeCount',
+                'matchNumber', 'weightClass', 'stage', 'gelanggang', 'competitionCategory', 'jurusType', 'jurusJudgeCount',
                 'activePerformerCorner', 'jurusState', 'blueName', 'blueContingent', 'blueCountry', 'bluePhoto',
                 'redName', 'redContingent', 'redCountry', 'redPhoto',
                 'roundDurationSec', 'currentRound', 'totalRounds', 'status',
@@ -488,7 +593,8 @@ service cloud.firestore {
                 'blueScore', 'redScore', 'bluePunches', 'redPunches', 'blueKicks', 'redKicks',
                 'blueFalls', 'redFalls', 'blueBinaan', 'redBinaan',
                 'blueTeguran1', 'redTeguran1', 'blueTeguran2', 'redTeguran2',
-                'bluePeringatan', 'redPeringatan', 'judge1Vote', 'judge2Vote', 'judge3Vote',
+                'bluePeringatan', 'redPeringatan', 'blueProtests', 'redProtests',
+                'judge1Vote', 'judge2Vote', 'judge3Vote',
                 'verification', 'winner', 'winMethod', 'finishedAtMs', 'updatedAt'
               ])
             )
