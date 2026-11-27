@@ -50,6 +50,7 @@ import { exportArenaSummaryPdf, exportMatchPdf } from '../utils/pdfExport';
 import { isSoundMuted, playArenaGong, setSoundMuted } from '../utils/soundEffects';
 import { AccountSessionModal } from './AccountSessionModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { StationSharePanel } from './StationSharePanel';
 
 interface LandingPageProps {
   onSelectView: (view: AppView) => void;
@@ -95,6 +96,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
     signInGoogle,
     signOutGoogle,
     isSuperAdmin,
+    isStationGuest,
     isFullJuriUnlocked,
     logoutPortal,
     arena,
@@ -374,6 +376,38 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
               </div>
             </div>
           </button>
+        ) : isStationGuest ? (
+          <div
+            data-testid="landing-station-guest-badge"
+            className="min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0e0620]/85 backdrop-blur-md border border-cyan-400/50 flex flex-wrap items-center gap-3 shadow-lg"
+          >
+            <div className="min-w-0 leading-tight space-y-0.5">
+              <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-cyan-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <span>Event Aktif</span>
+                <span className="text-slate-400">&middot;</span>
+                <span className="text-yellow-300 truncate max-w-[160px] sm:max-w-[220px]">
+                  {arena.name}
+                </span>
+              </div>
+              <div className="text-[11px] font-semibold text-white truncate max-w-[240px] sm:max-w-[320px]">
+                Perangkat Terhubung (Tanpa Login)
+              </div>
+              <div className="text-[10px] text-blue-200/80 font-mono truncate max-w-[240px] sm:max-w-[320px]">
+                Sinkron Langsung &middot; {arena.id}
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="landing-google-login-button"
+              disabled={authLoading}
+              onClick={() => void signInGoogle()}
+              className="min-h-[32px] px-2.5 py-1 rounded-lg bg-yellow-400 hover:bg-yellow-300 disabled:opacity-60 text-black text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors shrink-0"
+            >
+              <LogIn className="w-3.5 h-3.5 shrink-0" />
+              <span>{authLoading ? 'Login...' : 'Login Sekretaris'}</span>
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -645,6 +679,8 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
                           </button>
                         </div>
                       </div>
+
+                      <StationSharePanel arenaId={arena.id} arenaName={arena.name} compact />
                     </div>
                   ) : (
                     <div className="space-y-2.5">

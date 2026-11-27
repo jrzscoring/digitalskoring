@@ -20,6 +20,7 @@ import {
   buildEventShareUrl,
   validateOfficialProfileInput,
 } from '../utils/authSession';
+import { StationSharePanel } from './StationSharePanel';
 
 interface AccountSessionModalProps {
   open: boolean;
@@ -260,8 +261,9 @@ export function AccountSessionModal({ open, onClose }: AccountSessionModalProps)
             </div>
           </div>
           <p className="text-[11px] text-blue-200/85 leading-relaxed">
-            Gunakan akun Google yang sama di seluruh perangkat event ini untuk sinkronisasi langsung tanpa daftar UID, atau gunakan ID Arena di bawah jika perangkat petugas memakai akun Google terpisah.
+            Gunakan Scan QR atau Link HTTPS khusus di bawah agar perangkat Juri, Timer, Dewan, dan Monitor dapat langsung tersinkronisasi tanpa login Google.
           </p>
+          <StationSharePanel arenaId={arena.id} arenaName={arena.name} compact />
         </div>
 
         {/* Profile Edit Form */}

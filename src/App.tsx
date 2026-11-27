@@ -35,10 +35,13 @@ function parseViewFromLocation(): AppView {
 }
 
 function AppContent() {
-  const { user, authReady } = useArena();
+  const { user, authReady, isStationGuest } = useArena();
   const [view, setView] = useState<AppView>(() => parseViewFromLocation());
 
-  const hasEnteredPortal = authReady && Boolean(user);
+  // Main server (Sekretaris) & unlinked root ALWAYS require Google login;
+  // Station devices (Juri, Timer, Dewan, Monitor) connected via QR/HTTPS link can enter without Google login.
+  const canAccessAsStationGuest = isStationGuest && view !== 'sekretaris';
+  const hasEnteredPortal = authReady && (Boolean(user) || canAccessAsStationGuest);
 
   useAutoFullscreen(hasEnteredPortal && shouldAutoFullscreenView(view));
 

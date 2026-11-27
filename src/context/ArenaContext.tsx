@@ -86,11 +86,14 @@ import {
   isFullJuriUnlockedForMode,
   isOwnAccountArenaId,
   isSuperAdminEmail,
+  parseStationShareLink,
+  readStationSessionArenaId,
   readStoredPortalAccessMode,
   resolveCourtForArenaId,
   resolvePortalModeAfterGoogleLogin,
   verifyPortalPasscode,
   writeAcknowledgedLimitedNoticeUid,
+  writeStationSessionArenaId,
   writeStoredPortalAccessMode,
 } from '../utils/authSession';
 import { buildTournamentBracketSlots } from '../utils/bracketBuilder';
@@ -563,6 +566,7 @@ interface ArenaContextValue {
   athletes: AthleteData[];
   brackets: BracketMatchSlot[];
   liveTimerMs: number;
+  isStationGuest: boolean;
   portalAccessMode: PortalAccessMode;
   isFullJuriUnlocked: boolean;
   loginWithPortalPasscode: (passcode: string) => { valid: boolean; error?: string };
@@ -692,9 +696,15 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const [operators, setOperators] = useState<ArenaOperatorRecord[]>([]);
   const [joinedArenaId, setJoinedArenaId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-    const a = params.get('arena');
-    return a ? sanitizeId(a) : null;
+    const stationLink = parseStationShareLink(window.location.search, window.location.hash);
+    if (stationLink.arenaId) {
+      if (stationLink.isStationLink) {
+        writeStationSessionArenaId(stationLink.arenaId);
+      }
+      return stationLink.arenaId;
+    }
+    const sessionArena = readStationSessionArenaId();
+    return sessionArena ? sanitizeId(sessionArena) : null;
   });
   const joinedArenaIdRef = useRef<string | null>(joinedArenaId);
   const [portalAccessMode, setPortalAccessMode] = useState<PortalAccessMode>(() =>
@@ -713,6 +723,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
   const startBreakTimerRef = useRef<(seconds?: number) => Promise<void>>(async () => {});
   const pendingPenaltyKeysRef = useRef<Set<string>>(new Set());
   const pendingJudgeUndoKeysRef = useRef<Set<string>>(new Set());
+  const stationRtdbHandlerRef = useRef<(normalized: LocalStorePayload) => void>(() => {});
   const rtdbArenaId = joinedArenaId || localStore.arena.id || 'gelanggang-a';
 
   // Keep synchronous refs aligned with state
@@ -738,10 +749,40 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         setProfileLoading(false);
         setLoginLogs([]);
         setOperators([]);
-        setPortalAccessMode('locked');
-        writeStoredPortalAccessMode('locked');
+        const stationLink =
+          typeof window !== 'undefined'
+            ? parseStationShareLink(window.location.search, window.location.hash)
+            : { isStationLink: false, arenaId: null, view: null };
+        const activeStationArena = stationLink.isStationLink
+          ? stationLink.arenaId
+          : readStationSessionArenaId();
+        if (activeStationArena) {
+          const safeStationId = sanitizeId(activeStationArena);
+          const nextGuestMode = resolvePortalModeAfterGoogleLogin(readStoredPortalAccessMode());
+          setPortalAccessMode(nextGuestMode);
+          writeStoredPortalAccessMode(nextGuestMode);
+          if (joinedArenaIdRef.current !== safeStationId) {
+            joinedArenaIdRef.current = safeStationId;
+            setJoinedArenaId(safeStationId);
+          }
+        } else {
+          setPortalAccessMode('locked');
+          writeStoredPortalAccessMode('locked');
+        }
         writeAcknowledgedLimitedNoticeUid(null);
       } else {
+        const urlArena =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search).get('arena')
+            : null;
+        const staleStationArena = readStationSessionArenaId();
+        if (!urlArena && staleStationArena) {
+          writeStationSessionArenaId(null);
+          if (joinedArenaIdRef.current === sanitizeId(staleStationArena)) {
+            joinedArenaIdRef.current = null;
+            setJoinedArenaId(null);
+          }
+        }
         // Ensure signed-in Google account never stays bound to shared public gelanggang-a..d
         const activeJoin = joinedArenaIdRef.current;
         if (activeJoin && /^gelanggang-[a-d]$/.test(activeJoin)) {
@@ -927,10 +968,23 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const getSeedForSync = useCallback(() => loadLocalStore(joinedArenaId), [joinedArenaId]);
 
+  const handleStationRtdbUpdateForwarder = useCallback((normalized: LocalStorePayload) => {
+    stationRtdbHandlerRef.current(normalized);
+  }, []);
+
   const currentLocalActiveMatchId =
     localStore.matches.find((m) => m.id === localStore.arena.activeMatchId)?.id ||
     localStore.matches[0]?.id ||
     '';
+
+  const isStationGuest = useMemo(() => {
+    if (user) return false;
+    const stationLink =
+      typeof window !== 'undefined'
+        ? parseStationShareLink(window.location.search, window.location.hash)
+        : { isStationLink: false, arenaId: null, view: null };
+    return Boolean(stationLink.isStationLink || readStationSessionArenaId() || joinedArenaId);
+  }, [user, joinedArenaId]);
 
   const {
     cloudArena,
@@ -944,15 +998,18 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     setSyncError,
     flushRtdbBackup,
     retrySyncNow,
+    bridgeClientId,
   } = useFirestoreSync({
     user,
     authReady,
     joinedArenaId,
     rtdbArenaId,
     activeMatchId: currentLocalActiveMatchId,
+    allowRtdbSeed: !isStationGuest,
     getSeedPayload: getSeedForSync,
     onRtdbSync: handleRtdbSync,
     onFirestoreMirror: handleFirestoreMirror,
+    onStationRtdbUpdate: handleStationRtdbUpdateForwarder,
     onPendingOpsCountChange: setPendingOpsCount,
   });
 
@@ -976,6 +1033,11 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         const targetId = joinedArenaId || next.arena.id || 'gelanggang-a';
         const backupRecord = saveRtdbLocalBackup(targetId, next, true);
         const sanitizedPayload = sanitizeForRtdb(next);
+        const bridgeStampedPayload = {
+          ...sanitizedPayload,
+          _bridgeWriterId: bridgeClientId,
+          _bridgeUpdatedAtMs: Date.now(),
+        };
 
         const queueToIndexedDb = (errorMsg?: string) => {
           pendingOpsCountRef.current += 1;
@@ -985,7 +1047,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             backend: 'rtdb',
             kind: 'score_update',
             rtdbPath: `silat_arenas/${targetId}`,
-            rtdbPayload: sanitizedPayload,
+            rtdbPayload: bridgeStampedPayload,
             ...(errorMsg ? { lastError: errorMsg } : {}),
           }).then(() => {
             void getIndexedDbSyncQueueCount(targetId, 'rtdb').then((idbCount) => {
@@ -1003,7 +1065,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        set(ref(rtdb, `silat_arenas/${targetId}`), sanitizedPayload)
+        set(ref(rtdb, `silat_arenas/${targetId}`), bridgeStampedPayload)
           .then(() => {
             markRtdbBackupSynced(targetId, backupRecord.lastUpdatedAtMs);
             setSyncError(null);
@@ -1017,7 +1079,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           });
       }
     },
-    [persistLocalMirror, user, cloudArena, joinedArenaId, rtdbConnected, flushRtdbBackup, setSyncError]
+    [persistLocalMirror, user, cloudArena, joinedArenaId, rtdbConnected, flushRtdbBackup, setSyncError, bridgeClientId]
   );
 
   type QueuedOpInput = Omit<PendingFirestoreOp, 'id' | 'createdAtMs'>;
@@ -1161,6 +1223,149 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     [commitLocalBackupOnly]
   );
 
+  // Persist scoring/timer/event mutations sent by login-free station devices (via RTDB bridge) into Cloud Firestore
+  useEffect(() => {
+    const STATION_MATCH_UPDATE_KEYS: (keyof MatchData)[] = [
+      'status',
+      'currentRound',
+      'timerRemainingMs',
+      'timerStartedAtMs',
+      'juriLocked',
+      'activePerformerCorner',
+      'jurusState',
+      'blueScore',
+      'redScore',
+      'bluePunches',
+      'redPunches',
+      'blueKicks',
+      'redKicks',
+      'blueFalls',
+      'redFalls',
+      'blueBinaan',
+      'redBinaan',
+      'blueTeguran1',
+      'redTeguran1',
+      'blueTeguran2',
+      'redTeguran2',
+      'bluePeringatan',
+      'redPeringatan',
+      'blueProtests',
+      'redProtests',
+      'judge1Vote',
+      'judge2Vote',
+      'judge3Vote',
+      'verification',
+      'winner',
+      'winMethod',
+      'finishedAtMs',
+    ];
+
+    stationRtdbHandlerRef.current = (normalized: LocalStorePayload) => {
+      if (!user || !cloudArena || !isBrowserOnline()) return;
+      if (normalized.arena?.id && normalized.arena.id !== cloudArena.id) return;
+
+      const currentStore = localStoreRef.current;
+      const incomingMatchesById = new Map((normalized.matches || []).map((m) => [m.id, m]));
+      const ops: QueuedOpInput[] = [];
+      const matchPatchesById = new Map<string, Partial<MatchData>>();
+      const mergedEventsByMatch: Record<string, MatchEvent[]> = {};
+
+      for (const existingMatch of currentStore.matches) {
+        const incomingMatch = incomingMatchesById.get(existingMatch.id);
+        if (!incomingMatch) continue;
+
+        const patch: Record<string, unknown> = {};
+        for (const key of STATION_MATCH_UPDATE_KEYS) {
+          const inVal = incomingMatch[key];
+          const curVal = existingMatch[key];
+          if (inVal !== undefined && JSON.stringify(inVal) !== JSON.stringify(curVal)) {
+            patch[key] = inVal;
+          }
+        }
+        if (Object.keys(patch).length > 0) {
+          matchPatchesById.set(existingMatch.id, patch as Partial<MatchData>);
+          ops.push({
+            opType: 'update',
+            pathSegments: ['arenas', cloudArena.id, 'matches', existingMatch.id],
+            data: patch,
+            timestampMode: 'update',
+          });
+        }
+
+        const incomingEvents = normalized.eventsByMatch?.[existingMatch.id] || [];
+        const existingEvents = currentStore.eventsByMatch?.[existingMatch.id] || [];
+        if (incomingEvents.length > 0) {
+          const existingEventsById = new Map(existingEvents.map((ev) => [ev.id, ev]));
+          let hasEventChanges = false;
+          for (const ev of incomingEvents) {
+            if (!ev.id) continue;
+            const prevEv = existingEventsById.get(ev.id);
+            if (!prevEv) {
+              hasEventChanges = true;
+              ops.push({
+                opType: 'set',
+                pathSegments: ['arenas', cloudArena.id, 'matches', existingMatch.id, 'events', ev.id],
+                data: {
+                  id: ev.id,
+                  arenaId: cloudArena.id,
+                  matchId: existingMatch.id,
+                  ownerId: cloudArena.ownerId,
+                  actorRole: clampStr(ev.actorRole || 'Juri', 32, 'Juri'),
+                  corner: ev.corner === 'blue' || ev.corner === 'red' ? ev.corner : 'neutral',
+                  type: clampStr(ev.type || 'info', 32, 'info'),
+                  pointsDelta: Math.min(500, Math.max(-500, Math.round(ev.pointsDelta || 0))),
+                  round: Math.min(3, Math.max(1, Math.round(ev.round || 1))),
+                  matchTimeFormatted: clampStr(ev.matchTimeFormatted || '00:00', 16, '00:00'),
+                  description: clampStr(ev.description || '-', 200, '-'),
+                  undone: Boolean(ev.undone),
+                },
+                timestampMode: 'createdAtOnly',
+              });
+            } else if (ev.undone === true && !prevEv.undone) {
+              hasEventChanges = true;
+              ops.push({
+                opType: 'update',
+                pathSegments: ['arenas', cloudArena.id, 'matches', existingMatch.id, 'events', ev.id],
+                data: { undone: true },
+                timestampMode: 'none',
+              });
+            }
+          }
+          if (hasEventChanges) {
+            const mergedMap = new Map<string, MatchEvent>();
+            for (const ev of incomingEvents) {
+              if (ev.id) mergedMap.set(ev.id, ev);
+            }
+            for (const ev of existingEvents) {
+              if (ev.id && !mergedMap.has(ev.id)) mergedMap.set(ev.id, ev);
+            }
+            mergedEventsByMatch[existingMatch.id] = Array.from(mergedMap.values())
+              .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
+              .slice(0, 100);
+          }
+        }
+      }
+
+      if (ops.length === 0) return;
+
+      void executeFirestoreWithFallback(cloudArena.id, ops, (prev) => ({
+        ...prev,
+        matches: prev.matches.map((m) => {
+          const patch = matchPatchesById.get(m.id);
+          return patch ? { ...m, ...patch } : m;
+        }),
+        eventsByMatch: {
+          ...prev.eventsByMatch,
+          ...mergedEventsByMatch,
+        },
+      }));
+    };
+
+    return () => {
+      stationRtdbHandlerRef.current = () => {};
+    };
+  }, [user, cloudArena, executeFirestoreWithFallback]);
+
   const effectivePendingSyncCount =
     mode === 'firebase'
       ? pendingOpsCount
@@ -1293,6 +1498,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     setSyncError(null);
     broadcastPortalAccessMode('locked');
     writeAcknowledgedLimitedNoticeUid(null);
+    writeStationSessionArenaId(null);
     await firebaseSignOut(auth);
     setUserProfile(null);
     setLoginLogs([]);
@@ -5313,6 +5519,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     athletes,
     brackets,
     liveTimerMs,
+    isStationGuest,
     portalAccessMode,
     isFullJuriUnlocked,
     loginWithPortalPasscode,

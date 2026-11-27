@@ -107,15 +107,48 @@ export function normalizeRtdbPayload(raw: unknown): LocalStorePayload | null {
   };
 }
 
+function stripTimestampsForDigest(obj: unknown): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map(stripTimestampsForDigest);
+  }
+  if (obj && typeof obj === 'object') {
+    const out: Record<string, unknown> = {};
+    const entries = Object.entries(obj as Record<string, unknown>).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    for (const [k, v] of entries) {
+      if (
+        k === 'createdAt' ||
+        k === 'updatedAt' ||
+        k === '_bridgeWriterId' ||
+        k === '_bridgeUpdatedAtMs'
+      ) {
+        continue;
+      }
+      if (v !== undefined) {
+        out[k] = stripTimestampsForDigest(v);
+      }
+    }
+    return out;
+  }
+  return obj;
+}
+
+export function computeBridgeDigest(payload: LocalStorePayload): string {
+  return JSON.stringify(stripTimestampsForDigest(payload));
+}
+
 interface UseFirestoreSyncParams {
   user: User | null;
   authReady: boolean;
   joinedArenaId: string | null;
   rtdbArenaId: string;
   activeMatchId: string;
+  allowRtdbSeed?: boolean;
   getSeedPayload: () => LocalStorePayload;
   onRtdbSync: (payload: LocalStorePayload) => void;
   onFirestoreMirror?: (payload: LocalStorePayload) => void;
+  onStationRtdbUpdate?: (payload: LocalStorePayload) => void;
   onPendingOpsCountChange?: (count: number) => void;
 }
 
@@ -125,9 +158,11 @@ export function useFirestoreSync({
   joinedArenaId,
   rtdbArenaId,
   activeMatchId,
+  allowRtdbSeed = true,
   getSeedPayload,
   onRtdbSync,
   onFirestoreMirror,
+  onStationRtdbUpdate,
   onPendingOpsCountChange,
 }: UseFirestoreSyncParams) {
   const [cloudArena, setCloudArena] = useState<ArenaData | null>(null);
@@ -144,6 +179,8 @@ export function useFirestoreSync({
   const flushingRtdbRef = useRef(false);
   const flushingFirestoreRef = useRef(false);
   const hasPendingRtdbQueueRef = useRef(false);
+  const lastBridgeDigestRef = useRef<string>('');
+  const hasPublishedInitialBridgeRef = useRef<boolean>(false);
 
   const isFirestoreActive = Boolean(user && cloudArena);
 
@@ -471,6 +508,9 @@ export function useFirestoreSync({
 
         const val = snap.val();
         if (val === null) {
+          if (!allowRtdbSeed) {
+            return;
+          }
           const seedPayload = sanitizeForRtdb(getSeedPayload());
           seedPayload.arena.id = rtdbArenaId;
           saveRtdbLocalBackup(rtdbArenaId, seedPayload, true);
@@ -503,7 +543,17 @@ export function useFirestoreSync({
       unsubConn();
       unsubArena();
     };
-  }, [rtdbArenaId, isFirestoreActive, authReady, user, getSeedPayload, onRtdbSync, flushRtdbBackup, onPendingOpsCountChange]);
+  }, [
+    rtdbArenaId,
+    isFirestoreActive,
+    authReady,
+    user,
+    allowRtdbSeed,
+    getSeedPayload,
+    onRtdbSync,
+    flushRtdbBackup,
+    onPendingOpsCountChange,
+  ]);
 
   // Trigger RTDB flush automatically whenever browser comes back online while connected
   useEffect(() => {
@@ -858,6 +908,90 @@ export function useFirestoreSync({
     flushRtdbBackup,
   ]);
 
+  // 8. Sekretaris (Firestore) <-> Login-Free Station Devices (Juri/Timer/Dewan/Monitor) RTDB Bridge
+  useEffect(() => {
+    hasPublishedInitialBridgeRef.current = false;
+    lastBridgeDigestRef.current = '';
+    if (!isFirestoreActive || !rtdb || !cloudArena || !user) return;
+
+    const bridgeRef = ref(rtdb, `silat_arenas/${cloudArena.id}`);
+    const unsubBridge = onValue(bridgeRef, (snap) => {
+      const raw = snap.val() as (Partial<LocalStorePayload> & { _bridgeWriterId?: string }) | null;
+      if (!raw) return;
+      if (!hasPublishedInitialBridgeRef.current) return;
+      if (raw._bridgeWriterId === tabTokenRef.current) return;
+
+      const normalized = normalizeRtdbPayload(raw);
+      if (!normalized) return;
+
+      const incomingDigest = computeBridgeDigest(normalized);
+      if (incomingDigest === lastBridgeDigestRef.current) return;
+
+      lastBridgeDigestRef.current = incomingDigest;
+      onStationRtdbUpdate?.(normalized);
+    });
+
+    return () => {
+      unsubBridge();
+      hasPublishedInitialBridgeRef.current = false;
+      lastBridgeDigestRef.current = '';
+    };
+  }, [isFirestoreActive, cloudArena?.id, user, onStationRtdbUpdate]);
+
+  useEffect(() => {
+    if (!isFirestoreActive || !rtdb || !cloudArena || !user || !isOnline || cloudMatches.length === 0) {
+      return;
+    }
+    if (getPendingFirestoreOps(cloudArena.id).length > 0) return;
+
+    const existingBackup = readOfflineBackup(cloudArena.id);
+    const eventsByMatch: Record<string, MatchEvent[]> = {
+      ...(existingBackup?.payload.eventsByMatch || {}),
+    };
+    if (effectiveActiveMatchId) {
+      eventsByMatch[effectiveActiveMatchId] = cloudEvents;
+    }
+
+    const payloadToPublish: LocalStorePayload = {
+      arena: cloudArena,
+      matches: cloudMatches,
+      eventsByMatch,
+      athletes: cloudAthletes,
+      brackets: cloudBrackets,
+    };
+    const nextDigest = computeBridgeDigest(payloadToPublish);
+    if (hasPublishedInitialBridgeRef.current && nextDigest === lastBridgeDigestRef.current) {
+      return;
+    }
+
+    lastBridgeDigestRef.current = nextDigest;
+    const bridgePayload = {
+      ...sanitizeForRtdb(payloadToPublish),
+      _bridgeWriterId: tabTokenRef.current,
+      _bridgeUpdatedAtMs: Date.now(),
+    };
+    const bridgeRef = ref(rtdb, `silat_arenas/${cloudArena.id}`);
+    void set(bridgeRef, bridgePayload)
+      .then(() => {
+        hasPublishedInitialBridgeRef.current = true;
+      })
+      .catch((err) => {
+        if (!isOfflineNetworkError(err)) {
+          console.warn('Station bridge publish warning:', err?.message);
+        }
+      });
+  }, [
+    isFirestoreActive,
+    isOnline,
+    user,
+    cloudArena,
+    cloudMatches,
+    cloudEvents,
+    cloudAthletes,
+    cloudBrackets,
+    effectiveActiveMatchId,
+  ]);
+
   const retrySyncNow = useCallback(async () => {
     if (!isBrowserOnline()) return;
     if (isFirestoreActive && cloudArena) {
@@ -883,5 +1017,6 @@ export function useFirestoreSync({
     flushRtdbBackup,
     flushPendingFirestoreOps,
     retrySyncNow,
+    bridgeClientId: tabTokenRef.current,
   };
 }

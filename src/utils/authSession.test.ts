@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   PORTAL_ACCESS_PASSCODE,
   buildEventShareUrl,
+  buildStationShareUrl,
   courtIdFromCourtLetter,
   detectClientDeviceLabel,
   formatFirebaseAuthError,
@@ -11,6 +12,7 @@ import {
   isJudgeIdAllowedForMode,
   isOwnAccountArenaId,
   isSuperAdminEmail,
+  parseStationShareLink,
   resolveCourtForArenaId,
   resolvePortalLoginInput,
   resolvePortalModeAfterGoogleLogin,
@@ -178,4 +180,54 @@ test('buildEventShareUrl appends arena query param and clears hash', () => {
     buildEventShareUrl('arena-userAlpha123-b', 'https://example.com/?foo=1#/dewan'),
     'https://example.com/?foo=1&arena=arena-userAlpha123-b'
   );
+});
+
+test('buildStationShareUrl and parseStationShareLink support login-free Juri, Timer, Dewan, Monitor links while keeping Sekretaris protected', () => {
+  const juriUrl = buildStationShareUrl(
+    'arena-userAlpha123',
+    'juri',
+    'https://jrzscoring.github.io/digitalskoring/#/sekretaris'
+  );
+  assert.equal(
+    juriUrl,
+    'https://jrzscoring.github.io/digitalskoring/?arena=arena-userAlpha123&view=juri'
+  );
+
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123&view=juri', ''), {
+    isStationLink: true,
+    arenaId: 'arena-userAlpha123',
+    view: 'juri',
+  });
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123&view=timer', ''), {
+    isStationLink: true,
+    arenaId: 'arena-userAlpha123',
+    view: 'timer',
+  });
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123&view=dewan', ''), {
+    isStationLink: true,
+    arenaId: 'arena-userAlpha123',
+    view: 'dewan',
+  });
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123&view=scoreboard', ''), {
+    isStationLink: true,
+    arenaId: 'arena-userAlpha123',
+    view: 'scoreboard',
+  });
+
+  // Sekretaris or root landing links MUST NOT bypass Google Login
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123&view=sekretaris', ''), {
+    isStationLink: false,
+    arenaId: 'arena-userAlpha123',
+    view: null,
+  });
+  assert.deepEqual(parseStationShareLink('?arena=arena-userAlpha123', ''), {
+    isStationLink: false,
+    arenaId: 'arena-userAlpha123',
+    view: null,
+  });
+  assert.deepEqual(parseStationShareLink('?view=juri', ''), {
+    isStationLink: false,
+    arenaId: null,
+    view: null,
+  });
 });

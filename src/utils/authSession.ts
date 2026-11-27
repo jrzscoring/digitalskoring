@@ -188,6 +188,11 @@ export function resolveCourtForArenaId(arenaId: string, uid?: string | null): Ar
   return null;
 }
 
+export type StationShareView = 'juri' | 'timer' | 'dewan' | 'scoreboard';
+
+export const STATION_SHARE_VIEWS: StationShareView[] = ['juri', 'timer', 'dewan', 'scoreboard'];
+export const STATION_SESSION_ARENA_KEY = 'silat_station_session_arena_v1';
+
 export function buildEventShareUrl(arenaId: string, currentHref?: string): string {
   const baseHref =
     currentHref ?? (typeof window !== 'undefined' ? window.location.href : '');
@@ -199,6 +204,86 @@ export function buildEventShareUrl(arenaId: string, currentHref?: string): strin
     return url.toString();
   } catch {
     return `?arena=${encodeURIComponent(arenaId)}`;
+  }
+}
+
+export function buildStationShareUrl(
+  arenaId: string,
+  view: StationShareView,
+  currentHref?: string
+): string {
+  const baseHref =
+    currentHref ?? (typeof window !== 'undefined' ? window.location.href : '');
+  if (!baseHref) {
+    return `?arena=${encodeURIComponent(arenaId)}&view=${encodeURIComponent(view)}`;
+  }
+  try {
+    const url = new URL(baseHref);
+    url.searchParams.set('arena', arenaId);
+    url.searchParams.set('view', view);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return `?arena=${encodeURIComponent(arenaId)}&view=${encodeURIComponent(view)}`;
+  }
+}
+
+export function parseStationShareLink(
+  search?: string,
+  hash?: string
+): { isStationLink: boolean; arenaId: string | null; view: StationShareView | null } {
+  const rawSearch =
+    search ?? (typeof window !== 'undefined' ? window.location.search : '');
+  const rawHash =
+    hash ?? (typeof window !== 'undefined' ? window.location.hash : '');
+
+  const params = new URLSearchParams(rawSearch.startsWith('?') ? rawSearch.slice(1) : rawSearch);
+  const rawArena = params.get('arena')?.trim() || '';
+  const arenaId = rawArena ? sanitizeArenaIdValue(rawArena) : null;
+
+  const hashView = rawHash.replace(/^#\/?/, '').trim().toLowerCase();
+  const queryView = (params.get('view') || '').trim().toLowerCase();
+  const candidateView = STATION_SHARE_VIEWS.includes(hashView as StationShareView)
+    ? (hashView as StationShareView)
+    : STATION_SHARE_VIEWS.includes(queryView as StationShareView)
+    ? (queryView as StationShareView)
+    : null;
+
+  if (arenaId && candidateView) {
+    return {
+      isStationLink: true,
+      arenaId,
+      view: candidateView,
+    };
+  }
+
+  return {
+    isStationLink: false,
+    arenaId,
+    view: null,
+  };
+}
+
+export function readStationSessionArenaId(): string | null {
+  if (typeof window === 'undefined' || !window.sessionStorage) return null;
+  try {
+    const raw = window.sessionStorage.getItem(STATION_SESSION_ARENA_KEY);
+    return raw && raw.trim() ? raw.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeStationSessionArenaId(arenaId: string | null): void {
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    if (!arenaId || !arenaId.trim()) {
+      window.sessionStorage.removeItem(STATION_SESSION_ARENA_KEY);
+    } else {
+      window.sessionStorage.setItem(STATION_SESSION_ARENA_KEY, arenaId.trim());
+    }
+  } catch {
+    // ignore storage errors
   }
 }
 

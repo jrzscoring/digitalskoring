@@ -20,6 +20,7 @@ import {
   LogIn,
   Maximize2,
   Minimize2,
+  QrCode,
   Search,
   Settings,
   ShieldCheck,
@@ -55,6 +56,7 @@ import {
 } from './LaporanPanels';
 import { OfficialProtestPanel } from './OfficialProtestPanel';
 import { RoundScoreRecapChart } from './RoundScoreRecapChart';
+import { StationSharePanel } from './StationSharePanel';
 
 type SekretarisSection =
   | 'identitas'
@@ -143,6 +145,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
 
   const [historySearch, setHistorySearch] = useState('');
   const [showAllReadyModal, setShowAllReadyModal] = useState(false);
+  const [showStationShareModal, setShowStationShareModal] = useState(false);
   const [readyModalSearch, setReadyModalSearch] = useState('');
   const { isFullscreen, toggleFullscreen } = useFullscreenState();
 
@@ -261,6 +264,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
         setRegistrasiMenuOpen(false);
         setLaporanMenuOpen(false);
         setShowAllReadyModal(false);
+        setShowStationShareModal(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -705,6 +709,20 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              data-testid="sekretaris-qr-share-btn"
+              onClick={() => {
+                setShowStationShareModal(true);
+                setRegistrasiMenuOpen(false);
+                setLaporanMenuOpen(false);
+              }}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-emerald-950/85 hover:bg-emerald-900 border border-emerald-400/60 hover:border-yellow-400 text-emerald-100 font-bold text-sm flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            >
+              <QrCode className="w-4 h-4 text-yellow-300 shrink-0" />
+              <span>QR &amp; Link Perangkat</span>
+            </button>
 
             <button
               type="button"
@@ -1215,6 +1233,8 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 <span>{authError}</span>
               </div>
             )}
+
+            <StationSharePanel arenaId={arena.id} arenaName={arena.name} />
 
             <form
               onSubmit={(e) => {
@@ -1758,6 +1778,57 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
                 type="button"
                 onClick={() => setShowAllReadyModal(false)}
                 className="min-h-[40px] px-5 py-2 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-500/60 text-xs font-bold text-white cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showStationShareModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sekretaris-qr-share-modal-title"
+          data-testid="sekretaris-qr-share-modal"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowStationShareModal(false);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-2xl bg-[#120726] border border-emerald-400/55 p-5 sm:p-6 shadow-2xl space-y-4 text-white">
+            <div className="flex items-center justify-between gap-3 border-b border-purple-800/60 pb-3">
+              <div className="flex items-center gap-2.5">
+                <QrCode className="w-5 h-5 text-yellow-300 shrink-0" />
+                <div>
+                  <h2
+                    id="sekretaris-qr-share-modal-title"
+                    className="font-display text-lg font-bold text-white"
+                  >
+                    QR Barcode &amp; Link Perangkat (Juri, Timer, Dewan, Monitor)
+                  </h2>
+                  <p className="text-[11px] text-emerald-300 font-mono">
+                    {arena.name} &middot; {arena.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStationShareModal(false)}
+                aria-label="Tutup modal QR & Link Perangkat"
+                className="p-1.5 rounded-lg bg-black/50 text-blue-200 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <StationSharePanel arenaId={arena.id} arenaName={arena.name} />
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setShowStationShareModal(false)}
+                className="min-h-[38px] px-5 py-1.5 rounded-xl bg-purple-900 hover:bg-purple-800 border border-purple-500/60 text-xs font-bold text-white cursor-pointer"
               >
                 Tutup
               </button>
