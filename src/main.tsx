@@ -45,8 +45,20 @@ function purgeLegacyBrowserData(): void {
 purgeLegacyBrowserData();
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  let hasReloadedForSw = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hasReloadedForSw) return;
+    hasReloadedForSw = true;
+    window.location.reload();
+  });
+
   registerSW({
     immediate: true,
+    onRegisteredSW(_swUrl, registration) {
+      if (registration) {
+        void registration.update();
+      }
+    },
     onRegisterError() {
       // Tetap beroperasi normal menggunakan localStorage backup jika SW diblokir di lingkungan tertentu
     },
