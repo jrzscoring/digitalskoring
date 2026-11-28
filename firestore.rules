@@ -59,7 +59,7 @@ service cloud.firestore {
     }
 
     function canAccessArena(arenaId) {
-      return isArenaOwner(arenaId) || isArenaOperator(arenaId) || isAdmin();
+      return isAdmin() || isArenaOwner(arenaId) || isArenaOperator(arenaId);
     }
 
     // --- Validation Blueprints ---
@@ -444,10 +444,13 @@ service cloud.firestore {
 
     match /arenas/{arenaId} {
       allow get: if isValidId(arenaId) && isVerifiedUser() && (
-        existing().ownerId == request.auth.uid || isArenaOperator(arenaId) || isAdmin()
+        isAdmin() ||
+        resource == null ||
+        existing().ownerId == request.auth.uid ||
+        isArenaOperator(arenaId)
       );
       allow list: if isVerifiedUser() && (
-        resource.data.ownerId == request.auth.uid || isAdmin()
+        isAdmin() || resource.data.ownerId == request.auth.uid
       );
       allow create: if isValidId(arenaId) && isVerifiedUser()
         && isValidArena(incoming())
@@ -461,7 +464,7 @@ service cloud.firestore {
         && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && (existing().ownerId == request.auth.uid || isAdmin())
+        && (isAdmin() || existing().ownerId == request.auth.uid)
         && (
           isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly([
@@ -469,15 +472,15 @@ service cloud.firestore {
           ])
         );
       allow delete: if isValidId(arenaId) && isVerifiedUser() && (
-        existing().ownerId == request.auth.uid || isAdmin()
+        isAdmin() || existing().ownerId == request.auth.uid
       );
 
       match /operators/{operatorUid} {
         allow get: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser() && (
-          request.auth.uid == operatorUid || isArenaOwner(arenaId) || isAdmin()
+          isAdmin() || request.auth.uid == operatorUid || isArenaOwner(arenaId)
         );
         allow list: if isVerifiedUser() && (
-          resource.data.ownerId == request.auth.uid || resource.data.uid == request.auth.uid || isAdmin()
+          isAdmin() || resource.data.ownerId == request.auth.uid || resource.data.uid == request.auth.uid
         );
         allow create: if isValidId(arenaId) && isValidUid(operatorUid) && isVerifiedUser()
           && isValidOperator(incoming())

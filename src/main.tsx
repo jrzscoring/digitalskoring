@@ -46,6 +46,8 @@ purgeLegacyBrowserData();
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   let hasReloadedForSw = false;
+  let activeRegistration: ServiceWorkerRegistration | undefined;
+
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (hasReloadedForSw) return;
     hasReloadedForSw = true;
@@ -55,6 +57,7 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   registerSW({
     immediate: true,
     onRegisteredSW(_swUrl, registration) {
+      activeRegistration = registration;
       if (registration) {
         void registration.update();
       }
@@ -63,6 +66,52 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       // Tetap beroperasi normal menggunakan localStorage backup jika SW diblokir di lingkungan tertentu
     },
   });
+
+  if (import.meta.env.PROD) {
+    let checkingFreshBuild = false;
+    const checkForFreshBuild = async () => {
+      if (checkingFreshBuild || !navigator.onLine) return;
+      checkingFreshBuild = true;
+      try {
+        const currentScript = Array.from(document.querySelectorAll('script[type="module"][src]'))
+          .map((el) => el.getAttribute('src') || '')
+          .find((src) => /assets\/index-[a-zA-Z0-9_-]+\.js/.test(src));
+        const currentBundle = currentScript?.match(/assets\/index-[a-zA-Z0-9_-]+\.js/)?.[0];
+        if (!currentBundle) return;
+
+        const res = await fetch(`./index.html?v=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const html = await res.text();
+        const latestBundle = html.match(/assets\/index-[a-zA-Z0-9_-]+\.js/)?.[0];
+        if (!latestBundle || latestBundle === currentBundle) return;
+
+        try {
+          if (window.sessionStorage.getItem('jrz_build_reload') === latestBundle) return;
+          window.sessionStorage.setItem('jrz_build_reload', latestBundle);
+        } catch {
+          // Ignore sessionStorage restriction
+        }
+
+        if ('caches' in window) {
+          const keys = await window.caches.keys();
+          await Promise.all(keys.map((key) => window.caches.delete(key)));
+        }
+        await activeRegistration?.update();
+        window.location.reload();
+      } catch {
+        // Ignore network errors while offline
+      } finally {
+        checkingFreshBuild = false;
+      }
+    };
+
+    void checkForFreshBuild();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        void checkForFreshBuild();
+      }
+    });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

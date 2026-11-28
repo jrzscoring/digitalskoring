@@ -75,6 +75,7 @@ interface UseFirestoreSyncParams {
   onFirestoreMirror?: (payload: LocalStorePayload) => void;
   onStationRtdbUpdate?: (payload: LocalStorePayload) => void;
   onPendingOpsCountChange?: (count: number) => void;
+  onJoinArenaDenied?: (deniedArenaId: string) => void;
 }
 
 export function useFirestoreSync({
@@ -89,6 +90,7 @@ export function useFirestoreSync({
   onFirestoreMirror,
   onStationRtdbUpdate,
   onPendingOpsCountChange,
+  onJoinArenaDenied,
 }: UseFirestoreSyncParams) {
   const [cloudArena, setCloudArena] = useState<ArenaData | null>(null);
   const [cloudMatches, setCloudMatches] = useState<MatchData[]>([]);
@@ -698,6 +700,19 @@ export function useFirestoreSync({
           hydrateFromBackup();
           return;
         }
+        if (isPermissionDeniedError(err)) {
+          if (!isOwnCourtArena && joinedArenaId) {
+            onJoinArenaDenied?.(targetArenaId);
+            setSyncError(
+              `Akses ke Arena "${targetArenaId}" ditolak untuk akun ini. Dialihkan ke Arena milik akun Google Anda.`
+            );
+            return;
+          }
+          setSyncError(
+            'Izin akses Cloud Firestore ditolak untuk akun ini. Silakan login ulang dengan akun Google Anda.'
+          );
+          return;
+        }
         setSyncError(err instanceof Error ? err.message : 'Gagal terhubung ke Firebase.');
       }
     };
@@ -711,7 +726,7 @@ export function useFirestoreSync({
       unsubAthletes?.();
       unsubBrackets?.();
     };
-  }, [authReady, user, joinedArenaId, reconnectTick, flushPendingFirestoreOps, onPendingOpsCountChange]);
+  }, [authReady, user, joinedArenaId, reconnectTick, flushPendingFirestoreOps, onPendingOpsCountChange, onJoinArenaDenied]);
 
   // 3. Operator access to another user's active match
   useEffect(() => {

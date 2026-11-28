@@ -989,6 +989,21 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     return Boolean(stationLink.isStationLink || readStationSessionArenaId() || joinedArenaId);
   }, [user, joinedArenaId]);
 
+  const handleJoinArenaDenied = useCallback((deniedArenaId: string) => {
+    writeStationSessionArenaId(null);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('arena') === deniedArenaId) {
+        params.delete('arena');
+        const qs = params.toString();
+        const nextUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, '', nextUrl);
+      }
+    }
+    joinedArenaIdRef.current = null;
+    setJoinedArenaId(null);
+  }, []);
+
   const {
     cloudArena,
     cloudMatches,
@@ -1014,6 +1029,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     onFirestoreMirror: handleFirestoreMirror,
     onStationRtdbUpdate: handleStationRtdbUpdateForwarder,
     onPendingOpsCountChange: setPendingOpsCount,
+    onJoinArenaDenied: handleJoinArenaDenied,
   });
 
   const mode: 'local' | 'firebase' | 'rtdb' =
