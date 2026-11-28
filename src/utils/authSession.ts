@@ -287,6 +287,69 @@ export function writeStationSessionArenaId(arenaId: string | null): void {
   }
 }
 
+export type ScannedQrResult =
+  | { ok: true; arenaId: string; view: StationShareView | null }
+  | { ok: false; error: string };
+
+export function parseScannedQrPayload(rawText: string): ScannedQrResult {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'QR Barcode kosong atau tidak terbaca.' };
+  }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        arenaId?: unknown;
+        arena?: unknown;
+        view?: unknown;
+      };
+      const rawArena =
+        typeof parsed.arenaId === 'string'
+          ? parsed.arenaId.trim()
+          : typeof parsed.arena === 'string'
+          ? parsed.arena.trim()
+          : '';
+      if (rawArena) {
+        const rawView =
+          typeof parsed.view === 'string' ? parsed.view.trim().toLowerCase() : '';
+        const view = STATION_SHARE_VIEWS.includes(rawView as StationShareView)
+          ? (rawView as StationShareView)
+          : null;
+        return { ok: true, arenaId: sanitizeArenaIdValue(rawArena), view };
+      }
+    } catch {
+      // fall through to URL/ID parsing
+    }
+  }
+
+  if (trimmed.includes('://') || trimmed.includes('?') || trimmed.includes('arena=')) {
+    try {
+      const urlObj = trimmed.includes('://')
+        ? new URL(trimmed)
+        : new URL(
+            trimmed.startsWith('?') || trimmed.startsWith('/') ? trimmed : `?${trimmed}`,
+            'https://jrzscore.local'
+          );
+      const parsed = parseStationShareLink(urlObj.search, urlObj.hash);
+      if (parsed.arenaId) {
+        return { ok: true, arenaId: parsed.arenaId, view: parsed.view };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (/^[a-zA-Z0-9_-]{2,64}$/.test(trimmed)) {
+    return { ok: true, arenaId: sanitizeArenaIdValue(trimmed), view: null };
+  }
+
+  return {
+    ok: false,
+    error: 'Format QR Barcode tidak dikenali sebagai ID atau Link Arena JRZ Score.',
+  };
+}
+
 export function resolveTargetAppView(
   role: OfficialStationRole,
   jumpToStation: boolean

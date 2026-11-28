@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut as firebaseSignOut, type User } from 'firebase/auth';
-import { ref, set } from 'firebase/database';
+import { ref, set, update } from 'firebase/database';
 import {
   collection,
   deleteDoc,
@@ -20,8 +20,9 @@ import {
 import {
   useFirestoreSync,
   type LocalStorePayload,
-  sanitizeForRtdb,
+  computeRtdbPatch,
   sanitizeId,
+  toRtdbWireSnapshot,
 } from '../hooks/useFirestoreSync';
 import { auth, db, googleProvider, handleFirestoreError, OperationType, rtdb, userRtdbProjectId } from '../lib/firebase';
 import {
@@ -48,6 +49,7 @@ import {
   type PendingFirestoreOp,
 } from '../utils/offlineSync';
 import type {
+  AppView,
   ArenaCourt,
   ArenaData,
   ArenaOperatorRecord,
@@ -80,6 +82,7 @@ import type {
 import {
   PORTAL_ACCESS_STORAGE_KEY,
   type PortalAccessMode,
+  type StationShareView,
   detectClientDeviceLabel,
   formatFirebaseAuthError,
   getAccountArenaId,
@@ -591,6 +594,10 @@ interface ArenaContextValue {
   ) => Promise<void>;
   updateArenaMeta: (meta: UpdateArenaMetaInput) => Promise<void>;
   joinArenaById: (arenaId: string) => Promise<boolean>;
+  connectStationByQrOrId: (
+    arenaIdInput: string,
+    targetView?: StationShareView | null
+  ) => Promise<{ ok: boolean; arenaId: string; view: AppView; error?: string }>;
   addOperatorUid: (
     uid: string,
     role: OfficialStationRole,
@@ -698,9 +705,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return null;
     const stationLink = parseStationShareLink(window.location.search, window.location.hash);
     if (stationLink.arenaId) {
-      if (stationLink.isStationLink) {
-        writeStationSessionArenaId(stationLink.arenaId);
-      }
+      writeStationSessionArenaId(stationLink.arenaId);
       return stationLink.arenaId;
     }
     const sessionArena = readStationSessionArenaId();
@@ -753,9 +758,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           typeof window !== 'undefined'
             ? parseStationShareLink(window.location.search, window.location.hash)
             : { isStationLink: false, arenaId: null, view: null };
-        const activeStationArena = stationLink.isStationLink
-          ? stationLink.arenaId
-          : readStationSessionArenaId();
+        const activeStationArena = stationLink.arenaId || readStationSessionArenaId();
         if (activeStationArena) {
           const safeStationId = sanitizeId(activeStationArena);
           const nextGuestMode = resolvePortalModeAfterGoogleLogin(readStoredPortalAccessMode());
@@ -1027,17 +1030,18 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
 
   const commitLocalStore = useCallback(
     (updater: (prev: LocalStorePayload) => LocalStorePayload) => {
-      const next = updater(localStoreRef.current);
+      const prevStore = localStoreRef.current;
+      const next = updater(prevStore);
       persistLocalMirror(next);
       if (rtdb && !user) {
         const targetId = joinedArenaId || next.arena.id || 'gelanggang-a';
-        const backupRecord = saveRtdbLocalBackup(targetId, next, true);
-        const sanitizedPayload = sanitizeForRtdb(next);
-        const bridgeStampedPayload = {
-          ...sanitizedPayload,
-          _bridgeWriterId: bridgeClientId,
-          _bridgeUpdatedAtMs: Date.now(),
-        };
+        const patch = computeRtdbPatch(prevStore, next, bridgeClientId);
+        if (patch === null) {
+          return;
+        }
+        const wireSnapshot =
+          patch !== undefined ? null : toRtdbWireSnapshot(next, bridgeClientId);
+        const queuePayload = patch !== undefined ? patch : wireSnapshot!;
 
         const queueToIndexedDb = (errorMsg?: string) => {
           pendingOpsCountRef.current += 1;
@@ -1047,7 +1051,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
             backend: 'rtdb',
             kind: 'score_update',
             rtdbPath: `silat_arenas/${targetId}`,
-            rtdbPayload: bridgeStampedPayload,
+            rtdbPayload: queuePayload,
             ...(errorMsg ? { lastError: errorMsg } : {}),
           }).then(() => {
             void getIndexedDbSyncQueueCount(targetId, 'rtdb').then((idbCount) => {
@@ -1061,17 +1065,25 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
         };
 
         if (!isBrowserOnline() || !rtdbConnected || pendingOpsCountRef.current > 0) {
+          saveRtdbLocalBackup(targetId, next, true);
           queueToIndexedDb();
           return;
         }
 
-        set(ref(rtdb, `silat_arenas/${targetId}`), bridgeStampedPayload)
+        const backupRecord = saveRtdbLocalBackup(targetId, next, false);
+        const writePromise =
+          patch !== undefined
+            ? update(ref(rtdb, `silat_arenas/${targetId}`), patch)
+            : set(ref(rtdb, `silat_arenas/${targetId}`), wireSnapshot);
+
+        writePromise
           .then(() => {
             markRtdbBackupSynced(targetId, backupRecord.lastUpdatedAtMs);
             setSyncError(null);
           })
           .catch((err) => {
             if (isOfflineNetworkError(err)) {
+              saveRtdbLocalBackup(targetId, next, true);
               queueToIndexedDb(err instanceof Error ? err.message : 'Network offline');
             } else {
               setSyncError(`Gagal menulis ke Firebase RTDB: ${err?.message || 'Unknown error'}`);
@@ -1079,7 +1091,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
           });
       }
     },
-    [persistLocalMirror, user, cloudArena, joinedArenaId, rtdbConnected, flushRtdbBackup, setSyncError, bridgeClientId]
+    [persistLocalMirror, user, joinedArenaId, rtdbConnected, flushRtdbBackup, setSyncError, bridgeClientId]
   );
 
   type QueuedOpInput = Omit<PendingFirestoreOp, 'id' | 'createdAtMs'>;
@@ -1790,6 +1802,42 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [user]
+  );
+
+  const connectStationByQrOrId = useCallback(
+    async (
+      arenaIdInput: string,
+      targetView?: StationShareView | null
+    ): Promise<{ ok: boolean; arenaId: string; view: AppView; error?: string }> => {
+      const safeId = sanitizeId(arenaIdInput);
+      const resolvedView: AppView = targetView || 'landing';
+      if (!user) {
+        if (!rtdb) {
+          const errMsg = 'Koneksi database real-time tidak aktif.';
+          setSyncError(errMsg);
+          return { ok: false, arenaId: safeId, view: resolvedView, error: errMsg };
+        }
+        writeStationSessionArenaId(safeId);
+        const nextGuestMode = resolvePortalModeAfterGoogleLogin(readStoredPortalAccessMode());
+        broadcastPortalAccessMode(nextGuestMode);
+        joinedArenaIdRef.current = safeId;
+        setJoinedArenaId(safeId);
+        setSyncError(null);
+        return { ok: true, arenaId: safeId, view: resolvedView };
+      }
+
+      const ok = await joinArenaById(safeId);
+      if (!ok) {
+        return {
+          ok: false,
+          arenaId: safeId,
+          view: resolvedView,
+          error: `Gagal terhubung ke Arena "${safeId}". Pastikan ID Arena benar atau sudah terdaftar.`,
+        };
+      }
+      return { ok: true, arenaId: safeId, view: resolvedView };
+    },
+    [user, broadcastPortalAccessMode, joinArenaById, setSyncError]
   );
 
   // Subscribe to operators registered for the active Firestore arena
@@ -5531,6 +5579,7 @@ export function ArenaProvider({ children }: { children: React.ReactNode }) {
     recordLoginAudit,
     updateArenaMeta,
     joinArenaById,
+    connectStationByQrOrId,
     addOperatorUid,
     removeOperatorUid,
     createMatch,

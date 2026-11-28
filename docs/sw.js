@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "731455a068c676edbca951c8b83abf7e"
   }, {
     "url": "index.html",
-    "revision": "65de9fe31c15ad6e06a39c2a60503ba4"
+    "revision": "e94e83fac6efca3a6234bcd7bdef5acf"
   }, {
     "url": "icon.svg",
     "revision": "493071dbc08b36d35bf61b2b935fdafe"
@@ -146,16 +146,16 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/jatuhanmerah-DzDYeISq.png",
     "revision": null
   }, {
-    "url": "assets/index.es-DefdTzmj.js",
+    "url": "assets/index.es-BDUiXYTG.js",
     "revision": null
   }, {
-    "url": "assets/index-C69AKP5Y.css",
+    "url": "assets/index-DGSftVEX.js",
     "revision": null
   }, {
-    "url": "assets/index-B6QnWZzP.js",
+    "url": "assets/index-DDlIafWf.css",
     "revision": null
   }, {
-    "url": "assets/html2canvas-D-oRZiFg.js",
+    "url": "assets/html2canvas-DZVjqT7e.js",
     "revision": null
   }, {
     "url": "assets/dewan1-logo-gbYK5HuT.png",

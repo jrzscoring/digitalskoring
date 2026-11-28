@@ -55,6 +55,7 @@ import {
   RekapAtletPanel,
 } from './LaporanPanels';
 import { OfficialProtestPanel } from './OfficialProtestPanel';
+import { QRScannerModal } from './QRScannerModal';
 import { RoundScoreRecapChart } from './RoundScoreRecapChart';
 import { StationSharePanel } from './StationSharePanel';
 
@@ -146,6 +147,7 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
   const [historySearch, setHistorySearch] = useState('');
   const [showAllReadyModal, setShowAllReadyModal] = useState(false);
   const [showStationShareModal, setShowStationShareModal] = useState(false);
+  const [showQrScannerModal, setShowQrScannerModal] = useState(false);
   const [readyModalSearch, setReadyModalSearch] = useState('');
   const { isFullscreen, toggleFullscreen } = useFullscreenState();
 
@@ -1234,129 +1236,140 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </div>
             )}
 
-            <StationSharePanel arenaId={arena.id} arenaName={arena.name} />
+            <StationSharePanel
+              arenaId={arena.id}
+              arenaName={arena.name}
+              onOpenScanner={() => setShowQrScannerModal(true)}
+            />
 
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!operatorUidInput.trim()) return;
-                void addOperatorUid(
-                  operatorUidInput.trim(),
-                  operatorRoleInput,
-                  operatorNameInput.trim() || undefined
-                ).then((ok) => {
-                  if (ok) {
-                    setOperatorFeedback(
-                      `Operator "${operatorNameInput.trim() || operatorUidInput.trim()}" (${operatorRoleInput}) berhasil didaftarkan.`
-                    );
-                    setOperatorUidInput('');
-                    setOperatorNameInput('');
-                  }
-                });
-              }}
-              className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end"
-            >
-              <div className="sm:col-span-5">
-                <label htmlFor="op-uid-input" className="block text-xs font-medium text-blue-200 mb-1">
-                  UID Petugas (dari Profil Petugas)
-                </label>
-                <input
-                  id="op-uid-input"
-                  type="text"
-                  value={operatorUidInput}
-                  onChange={(e) => setOperatorUidInput(e.target.value)}
-                  placeholder="Tempel UID Firebase petugas..."
-                  maxLength={128}
-                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white font-mono text-xs focus:outline-none focus:border-yellow-400"
-                />
-              </div>
-              <div className="sm:col-span-3">
-                <label htmlFor="op-name-input" className="block text-xs font-medium text-blue-200 mb-1">
-                  Nama Petugas (Opsional)
-                </label>
-                <input
-                  id="op-name-input"
-                  type="text"
-                  value={operatorNameInput}
-                  onChange={(e) => setOperatorNameInput(e.target.value)}
-                  placeholder="Contoh: Juri 1 Matras A"
-                  maxLength={80}
-                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label htmlFor="op-role-select" className="block text-xs font-medium text-blue-200 mb-1">
-                  Peran Tugas
-                </label>
-                <select
-                  id="op-role-select"
-                  value={operatorRoleInput}
-                  onChange={(e) => setOperatorRoleInput(e.target.value as OfficialStationRole)}
-                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400 cursor-pointer"
+            <details className="rounded-xl bg-black/35 border border-purple-800/45 p-3.5">
+              <summary className="cursor-pointer text-xs font-semibold text-blue-200 hover:text-yellow-300 select-none">
+                Pengaturan Lanjutan: Daftarkan UID Petugas Manual ({operators.length} terdaftar)
+              </summary>
+              <div className="mt-3 space-y-3">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!operatorUidInput.trim()) return;
+                    void addOperatorUid(
+                      operatorUidInput.trim(),
+                      operatorRoleInput,
+                      operatorNameInput.trim() || undefined
+                    ).then((ok) => {
+                      if (ok) {
+                        setOperatorFeedback(
+                          `Operator "${operatorNameInput.trim() || operatorUidInput.trim()}" (${operatorRoleInput}) berhasil didaftarkan.`
+                        );
+                        setOperatorUidInput('');
+                        setOperatorNameInput('');
+                      }
+                    });
+                  }}
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end"
                 >
-                  <option value="Sekretaris">Sekretaris</option>
-                  <option value="Dewan">Dewan</option>
-                  <option value="Timer">Timer</option>
-                  <option value="Juri">Juri</option>
-                  <option value="Scoreboard">Scoreboard</option>
-                </select>
-              </div>
-              <div className="sm:col-span-2">
-                <button
-                  type="submit"
-                  disabled={!operatorUidInput.trim()}
-                  className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 text-black text-xs font-bold cursor-pointer"
-                >
-                  Daftarkan
-                </button>
-              </div>
-            </form>
+                  <div className="sm:col-span-5">
+                    <label htmlFor="op-uid-input" className="block text-xs font-medium text-blue-200 mb-1">
+                      UID Petugas (dari Profil Petugas)
+                    </label>
+                    <input
+                      id="op-uid-input"
+                      type="text"
+                      value={operatorUidInput}
+                      onChange={(e) => setOperatorUidInput(e.target.value)}
+                      placeholder="Tempel UID Firebase petugas..."
+                      maxLength={128}
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white font-mono text-xs focus:outline-none focus:border-yellow-400"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label htmlFor="op-name-input" className="block text-xs font-medium text-blue-200 mb-1">
+                      Nama Petugas (Opsional)
+                    </label>
+                    <input
+                      id="op-name-input"
+                      type="text"
+                      value={operatorNameInput}
+                      onChange={(e) => setOperatorNameInput(e.target.value)}
+                      placeholder="Contoh: Juri 1 Matras A"
+                      maxLength={80}
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label htmlFor="op-role-select" className="block text-xs font-medium text-blue-200 mb-1">
+                      Peran Tugas
+                    </label>
+                    <select
+                      id="op-role-select"
+                      value={operatorRoleInput}
+                      onChange={(e) => setOperatorRoleInput(e.target.value as OfficialStationRole)}
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-black/65 border border-blue-500/45 text-white text-xs focus:outline-none focus:border-yellow-400 cursor-pointer"
+                    >
+                      <option value="Sekretaris">Sekretaris</option>
+                      <option value="Dewan">Dewan</option>
+                      <option value="Timer">Timer</option>
+                      <option value="Juri">Juri</option>
+                      <option value="Scoreboard">Scoreboard</option>
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <button
+                      type="submit"
+                      disabled={!operatorUidInput.trim()}
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 text-black text-xs font-bold cursor-pointer"
+                    >
+                      Daftarkan
+                    </button>
+                  </div>
+                </form>
 
-            {operatorFeedback && (
-              <div
-                role="status"
-                className="rounded-lg bg-emerald-950/85 border border-emerald-400/60 px-3 py-2 text-xs text-emerald-100 flex items-center gap-2"
-              >
-                <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
-                <span>{operatorFeedback}</span>
-              </div>
-            )}
+                {operatorFeedback && (
+                  <div
+                    role="status"
+                    className="rounded-lg bg-emerald-950/85 border border-emerald-400/60 px-3 py-2 text-xs text-emerald-100 flex items-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+                    <span>{operatorFeedback}</span>
+                  </div>
+                )}
 
-            {operators.length > 0 && (
-              <div className="overflow-x-auto rounded-xl border border-purple-800/50">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-black/55 text-blue-200 border-b border-purple-800/50">
-                    <tr>
-                      <th className="px-3 py-2 font-semibold">Petugas</th>
-                      <th className="px-3 py-2 font-semibold">UID</th>
-                      <th className="px-3 py-2 font-semibold">Peran</th>
-                      <th className="px-3 py-2 font-semibold text-right">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-purple-900/40">
-                    {operators.map((op) => (
-                      <tr key={op.uid} className="bg-black/30">
-                        <td className="px-3 py-2 font-medium text-white">
-                          {op.displayName || 'Petugas Terdaftar'}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-slate-300">{op.uid}</td>
-                        <td className="px-3 py-2 text-yellow-300 font-semibold">{op.role}</td>
-                        <td className="px-3 py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => void removeOperatorUid(op.uid)}
-                            aria-label={`Hapus akses ${op.uid}`}
-                            className="p-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-800 border border-rose-500/40 text-rose-200 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {operators.length > 0 && (
+                  <div className="overflow-x-auto rounded-xl border border-purple-800/50">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-black/55 text-blue-200 border-b border-purple-800/50">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Petugas</th>
+                          <th className="px-3 py-2 font-semibold">UID</th>
+                          <th className="px-3 py-2 font-semibold">Peran</th>
+                          <th className="px-3 py-2 font-semibold text-right">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-purple-900/40">
+                        {operators.map((op) => (
+                          <tr key={op.uid} className="bg-black/30">
+                            <td className="px-3 py-2 font-medium text-white">
+                              {op.displayName || 'Petugas Terdaftar'}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-slate-300">{op.uid}</td>
+                            <td className="px-3 py-2 text-yellow-300 font-semibold">{op.role}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => void removeOperatorUid(op.uid)}
+                                aria-label={`Hapus akses ${op.uid}`}
+                                className="p-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-800 border border-rose-500/40 text-rose-200 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            )}
+            </details>
           </section>
         </div>
         ) : (
@@ -1822,7 +1835,14 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
               </button>
             </div>
 
-            <StationSharePanel arenaId={arena.id} arenaName={arena.name} />
+            <StationSharePanel
+              arenaId={arena.id}
+              arenaName={arena.name}
+              onOpenScanner={() => {
+                setShowStationShareModal(false);
+                setShowQrScannerModal(true);
+              }}
+            />
 
             <div className="flex justify-end pt-1">
               <button
@@ -1836,6 +1856,15 @@ export function SekretarisView({ onNavigate }: SekretarisViewProps) {
           </div>
         </div>
       )}
+      <QRScannerModal
+        open={showQrScannerModal}
+        onClose={() => setShowQrScannerModal(false)}
+        onConnected={(nextView) => {
+          if (nextView !== 'landing') {
+            onNavigate(nextView);
+          }
+        }}
+      />
     </div>
   );
 }

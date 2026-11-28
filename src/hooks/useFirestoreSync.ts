@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { onValue, ref, set } from 'firebase/database';
+import { onValue, ref, set, update } from 'firebase/database';
 import {
   collection,
   deleteDoc,
@@ -47,95 +47,20 @@ import {
   type OfflineBackupRecord,
   type QueuedSyncEntry,
 } from '../utils/offlineSync';
+import {
+  computeBridgeDigest,
+  computeRtdbPatch,
+  normalizeRtdbPayload,
+  sanitizeForRtdb,
+  toRtdbWireSnapshot,
+} from '../utils/rtdbBridge';
 
 export type { LocalStorePayload };
+export { computeBridgeDigest, computeRtdbPatch, normalizeRtdbPayload, sanitizeForRtdb, toRtdbWireSnapshot };
 
 export function sanitizeId(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64);
   return cleaned.length >= 2 ? cleaned : `id-${Date.now()}`;
-}
-
-export function sanitizeForRtdb(payload: LocalStorePayload): LocalStorePayload {
-  return JSON.parse(JSON.stringify(payload)) as LocalStorePayload;
-}
-
-export function normalizeRtdbPayload(raw: unknown): LocalStorePayload | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const data = raw as Partial<LocalStorePayload>;
-  if (!data.arena || !data.arena.id) return null;
-
-  const rawMatches = data.matches;
-  const matchesArray: MatchData[] = Array.isArray(rawMatches)
-    ? rawMatches.filter(Boolean)
-    : rawMatches && typeof rawMatches === 'object'
-    ? Object.values(rawMatches as Record<string, MatchData>).filter(Boolean)
-    : [];
-
-  if (matchesArray.length === 0) return null;
-
-  const eventsByMatch: Record<string, MatchEvent[]> = {};
-  if (data.eventsByMatch && typeof data.eventsByMatch === 'object') {
-    for (const [mId, list] of Object.entries(data.eventsByMatch)) {
-      if (Array.isArray(list)) {
-        eventsByMatch[mId] = list.filter(Boolean);
-      } else if (list && typeof list === 'object') {
-        eventsByMatch[mId] = Object.values(list as Record<string, MatchEvent>).filter(Boolean);
-      }
-    }
-  }
-
-  const rawAthletes = data.athletes;
-  const athletesArray: AthleteData[] = Array.isArray(rawAthletes)
-    ? rawAthletes.filter(Boolean)
-    : rawAthletes && typeof rawAthletes === 'object'
-    ? Object.values(rawAthletes as Record<string, AthleteData>).filter(Boolean)
-    : [];
-
-  const rawBrackets = data.brackets;
-  const bracketsArray: BracketMatchSlot[] = Array.isArray(rawBrackets)
-    ? rawBrackets.filter(Boolean)
-    : rawBrackets && typeof rawBrackets === 'object'
-    ? Object.values(rawBrackets as Record<string, BracketMatchSlot>).filter(Boolean)
-    : [];
-
-  return {
-    arena: data.arena,
-    matches: matchesArray,
-    eventsByMatch,
-    athletes: athletesArray,
-    brackets: bracketsArray,
-  };
-}
-
-function stripTimestampsForDigest(obj: unknown): unknown {
-  if (Array.isArray(obj)) {
-    return obj.map(stripTimestampsForDigest);
-  }
-  if (obj && typeof obj === 'object') {
-    const out: Record<string, unknown> = {};
-    const entries = Object.entries(obj as Record<string, unknown>).sort(([a], [b]) =>
-      a.localeCompare(b)
-    );
-    for (const [k, v] of entries) {
-      if (
-        k === 'createdAt' ||
-        k === 'updatedAt' ||
-        k === '_bridgeWriterId' ||
-        k === '_bridgeUpdatedAtMs'
-      ) {
-        continue;
-      }
-      if (v !== undefined) {
-        out[k] = stripTimestampsForDigest(v);
-      }
-    }
-    return out;
-  }
-  return obj;
-}
-
-export function computeBridgeDigest(payload: LocalStorePayload): string {
-  return JSON.stringify(stripTimestampsForDigest(payload));
 }
 
 interface UseFirestoreSyncParams {
@@ -181,6 +106,7 @@ export function useFirestoreSync({
   const hasPendingRtdbQueueRef = useRef(false);
   const lastBridgeDigestRef = useRef<string>('');
   const hasPublishedInitialBridgeRef = useRef<boolean>(false);
+  const lastPublishedPayloadRef = useRef<LocalStorePayload | null>(null);
 
   const isFirestoreActive = Boolean(user && cloudArena);
 
@@ -263,7 +189,7 @@ export function useFirestoreSync({
             if (hasOnlyFullSnapshots) {
               const latestEntry = queueEntries[queueEntries.length - 1];
               const payloadToSync = latestEntry.rtdbPayload as LocalStorePayload;
-              await set(ref(rtdb, fullPath), sanitizeForRtdb(payloadToSync));
+              await set(ref(rtdb, fullPath), toRtdbWireSnapshot(payloadToSync, tabTokenRef.current));
               await removeIndexedDbSyncItems(queueEntries.map((e) => e.id));
               markRtdbBackupSynced(targetId, latestBackup?.lastUpdatedAtMs);
               const remaining = await getIndexedDbSyncQueueCount(targetId, 'rtdb');
@@ -279,7 +205,11 @@ export function useFirestoreSync({
                   continue;
                 }
                 try {
-                  await set(ref(rtdb, targetPath), entry.rtdbPayload);
+                  if (targetPath === fullPath && typeof entry.rtdbPayload === 'object' && entry.rtdbPayload !== null && 'arena' in (entry.rtdbPayload as Record<string, unknown>)) {
+                    await set(ref(rtdb, targetPath), toRtdbWireSnapshot(entry.rtdbPayload as LocalStorePayload, tabTokenRef.current));
+                  } else {
+                    await update(ref(rtdb, targetPath), entry.rtdbPayload as Record<string, unknown>);
+                  }
                   await removeIndexedDbSyncItems([entry.id]);
                   const remaining = await getIndexedDbSyncQueueCount(targetId, 'rtdb');
                   hasPendingRtdbQueueRef.current = remaining > 0;
@@ -303,7 +233,7 @@ export function useFirestoreSync({
             }
           } else if (backupDirty && latestBackup) {
             const writtenVersion = latestBackup.lastUpdatedAtMs;
-            await set(ref(rtdb, `silat_arenas/${targetId}`), sanitizeForRtdb(latestBackup.payload));
+            await set(ref(rtdb, `silat_arenas/${targetId}`), toRtdbWireSnapshot(latestBackup.payload, tabTokenRef.current));
             markRtdbBackupSynced(targetId, writtenVersion);
             hasPendingRtdbQueueRef.current = false;
             onPendingOpsCountChange?.(0);
@@ -498,8 +428,8 @@ export function useFirestoreSync({
     const unsubArena = onValue(
       arenaRtdbRef,
       (snap) => {
-        // Protect unsynced IndexedDB/localStorage score queue from being overwritten by stale remote data
-        if (hasPendingRtdbQueueRef.current || isRtdbBackupDirty(rtdbArenaId)) {
+        // Protect queued offline score operations in IndexedDB from being overwritten by stale remote data
+        if (hasPendingRtdbQueueRef.current) {
           if (isBrowserOnline()) {
             void flushRtdbBackup(rtdbArenaId);
           }
@@ -513,8 +443,8 @@ export function useFirestoreSync({
           }
           const seedPayload = sanitizeForRtdb(getSeedPayload());
           seedPayload.arena.id = rtdbArenaId;
-          saveRtdbLocalBackup(rtdbArenaId, seedPayload, true);
-          set(arenaRtdbRef, seedPayload)
+          saveRtdbLocalBackup(rtdbArenaId, seedPayload, false);
+          set(arenaRtdbRef, toRtdbWireSnapshot(seedPayload, tabTokenRef.current))
             .then(() => {
               markRtdbBackupSynced(rtdbArenaId);
             })
@@ -912,6 +842,7 @@ export function useFirestoreSync({
   useEffect(() => {
     hasPublishedInitialBridgeRef.current = false;
     lastBridgeDigestRef.current = '';
+    lastPublishedPayloadRef.current = null;
     if (!isFirestoreActive || !rtdb || !cloudArena || !user) return;
 
     const bridgeRef = ref(rtdb, `silat_arenas/${cloudArena.id}`);
@@ -928,6 +859,16 @@ export function useFirestoreSync({
       if (incomingDigest === lastBridgeDigestRef.current) return;
 
       lastBridgeDigestRef.current = incomingDigest;
+      if (lastPublishedPayloadRef.current) {
+        lastPublishedPayloadRef.current = {
+          ...lastPublishedPayloadRef.current,
+          matches: normalized.matches,
+          eventsByMatch: {
+            ...lastPublishedPayloadRef.current.eventsByMatch,
+            ...normalized.eventsByMatch,
+          },
+        };
+      }
       onStationRtdbUpdate?.(normalized);
     });
 
@@ -935,6 +876,7 @@ export function useFirestoreSync({
       unsubBridge();
       hasPublishedInitialBridgeRef.current = false;
       lastBridgeDigestRef.current = '';
+      lastPublishedPayloadRef.current = null;
     };
   }, [isFirestoreActive, cloudArena?.id, user, onStationRtdbUpdate]);
 
@@ -949,7 +891,26 @@ export function useFirestoreSync({
       ...(existingBackup?.payload.eventsByMatch || {}),
     };
     if (effectiveActiveMatchId) {
-      eventsByMatch[effectiveActiveMatchId] = cloudEvents;
+      const prevBridgeEvents = lastPublishedPayloadRef.current?.eventsByMatch?.[effectiveActiveMatchId] || [];
+      const nowMs = Date.now();
+      const mergedMap = new Map<string, MatchEvent>();
+      for (const ev of cloudEvents) {
+        if (ev.id) mergedMap.set(ev.id, ev);
+      }
+      // Preserve freshly absorbed station events during brief Firestore cloudEvents lag
+      for (const ev of prevBridgeEvents) {
+        if (
+          ev.id &&
+          !mergedMap.has(ev.id) &&
+          typeof ev.createdAtMs === 'number' &&
+          nowMs - ev.createdAtMs < 15000
+        ) {
+          mergedMap.set(ev.id, ev);
+        }
+      }
+      eventsByMatch[effectiveActiveMatchId] = Array.from(mergedMap.values()).sort(
+        (a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0)
+      );
     }
 
     const payloadToPublish: LocalStorePayload = {
@@ -964,13 +925,33 @@ export function useFirestoreSync({
       return;
     }
 
-    lastBridgeDigestRef.current = nextDigest;
-    const bridgePayload = {
-      ...sanitizeForRtdb(payloadToPublish),
-      _bridgeWriterId: tabTokenRef.current,
-      _bridgeUpdatedAtMs: Date.now(),
-    };
     const bridgeRef = ref(rtdb, `silat_arenas/${cloudArena.id}`);
+    if (hasPublishedInitialBridgeRef.current && lastPublishedPayloadRef.current) {
+      const patch = computeRtdbPatch(
+        lastPublishedPayloadRef.current,
+        payloadToPublish,
+        tabTokenRef.current,
+        { preserveRecentEventsWindowMs: 15000 }
+      );
+      if (patch === null) {
+        lastBridgeDigestRef.current = nextDigest;
+        return;
+      }
+      if (patch !== undefined) {
+        lastBridgeDigestRef.current = nextDigest;
+        lastPublishedPayloadRef.current = payloadToPublish;
+        void update(bridgeRef, patch).catch((err) => {
+          if (!isOfflineNetworkError(err)) {
+            console.warn('Station bridge update warning:', err?.message);
+          }
+        });
+        return;
+      }
+    }
+
+    lastBridgeDigestRef.current = nextDigest;
+    lastPublishedPayloadRef.current = payloadToPublish;
+    const bridgePayload = toRtdbWireSnapshot(payloadToPublish, tabTokenRef.current);
     void set(bridgeRef, bridgePayload)
       .then(() => {
         hasPublishedInitialBridgeRef.current = true;

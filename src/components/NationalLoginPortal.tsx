@@ -1,11 +1,27 @@
-import { AlertCircle, LogIn, Maximize2, Minimize2, X } from 'lucide-react';
+import { useState } from 'react';
+import {
+  AlertCircle,
+  Camera,
+  LogIn,
+  Maximize2,
+  Minimize2,
+  Settings,
+  X,
+} from 'lucide-react';
 import jrzScoreLogo from '@/jrzscoreutama.png';
 import { useArena } from '../context/ArenaContext';
 import { useFullscreenState } from '../hooks/useAutoFullscreen';
+import type { AppView } from '../types/silat';
+import { QRScannerModal } from './QRScannerModal';
 
-export function NationalLoginPortal() {
+interface NationalLoginPortalProps {
+  onNavigate?: (view: AppView) => void;
+}
+
+export function NationalLoginPortal({ onNavigate }: NationalLoginPortalProps) {
   const { signInGoogle, authLoading, authError, clearAuthError } = useArena();
   const { isFullscreen, toggleFullscreen } = useFullscreenState();
+  const [showQrScannerModal, setShowQrScannerModal] = useState(false);
 
   const marqueeText =
     'Selamat datang di Sistem Digital Skoring JRZ SCORE. Menjunjung tinggi sportivitas, transparansi, dan akurasi penilaian secara real-time | untuk info lebih lanjut hubungi Whatsapp : 0813 7987 6424';
@@ -41,24 +57,36 @@ export function NationalLoginPortal() {
         />
       </div>
 
-      <button
-        type="button"
-        onClick={() => void toggleFullscreen()}
-        aria-label={isFullscreen ? 'Keluar Full Screen' : 'Layar Penuh'}
-        title={isFullscreen ? 'Keluar Full Screen' : 'Layar Penuh'}
-        className="absolute top-4 right-4 z-20 w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 hover:border-yellow-400/70 text-blue-100 hover:text-yellow-300 flex items-center justify-center transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
-      >
-        {isFullscreen ? (
-          <Minimize2 className="w-4 h-4" />
-        ) : (
-          <Maximize2 className="w-4 h-4" />
-        )}
-      </button>
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        <button
+          type="button"
+          data-testid="portal-settings-qr-button"
+          onClick={() => setShowQrScannerModal(true)}
+          aria-label="Pengaturan & Scan QR Kamera"
+          title="Pengaturan & Scan QR Kamera"
+          className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 hover:border-cyan-400/70 text-cyan-200 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => void toggleFullscreen()}
+          aria-label={isFullscreen ? 'Keluar Full Screen' : 'Layar Penuh'}
+          title={isFullscreen ? 'Keluar Full Screen' : 'Layar Penuh'}
+          className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/15 hover:border-yellow-400/70 text-blue-100 hover:text-yellow-300 flex items-center justify-center transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
+        >
+          {isFullscreen ? (
+            <Minimize2 className="w-4 h-4" />
+          ) : (
+            <Maximize2 className="w-4 h-4" />
+          )}
+        </button>
+      </div>
 
       <main className="relative z-10 w-full flex items-center justify-center">
         <section
           data-testid="google-event-login-card"
-          className="w-full max-w-[360px] mx-auto rounded-2xl bg-[#0e0620]/85 backdrop-blur-md border border-purple-500/40 p-6 sm:p-7 shadow-2xl space-y-5"
+          className="w-full max-w-[360px] mx-auto rounded-2xl bg-[#0e0620]/85 backdrop-blur-md border border-purple-500/40 p-6 sm:p-7 shadow-2xl space-y-4"
         >
           <h1 className="sr-only">Login JRZ Score</h1>
 
@@ -98,9 +126,29 @@ export function NationalLoginPortal() {
           >
             <LogIn className="w-4 h-4 shrink-0" />
             <span>
-              {authLoading ? 'Memproses Login...' : 'Login'}
+              {authLoading ? 'Memproses Login...' : 'Login Sekretaris (Google)'}
             </span>
           </button>
+
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-purple-300/70">
+            <span className="h-px flex-1 bg-purple-700/50" />
+            <span>atau perangkat lain</span>
+            <span className="h-px flex-1 bg-purple-700/50" />
+          </div>
+
+          <button
+            type="button"
+            data-testid="portal-join-qr-button"
+            onClick={() => setShowQrScannerModal(true)}
+            className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-cyan-950/75 hover:bg-cyan-900/90 active:scale-[0.99] border border-cyan-400/55 text-cyan-100 font-bold text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+          >
+            <Camera className="w-4 h-4 text-cyan-300 shrink-0" />
+            <span>Gabung Perangkat Lain (Scan QR)</span>
+          </button>
+
+          <p className="text-center text-[11px] text-blue-200/75 leading-relaxed">
+            Tablet <strong className="text-white">Juri, Dewan, Timer &amp; Monitor</strong> cukup scan QR dari Pengaturan Sekretaris tanpa login.
+          </p>
         </section>
       </main>
 
@@ -127,6 +175,16 @@ export function NationalLoginPortal() {
           </div>
         </div>
       </div>
+
+      <QRScannerModal
+        open={showQrScannerModal}
+        onClose={() => setShowQrScannerModal(false)}
+        onConnected={(nextView) => {
+          if (nextView !== 'landing') {
+            onNavigate?.(nextView);
+          }
+        }}
+      />
     </div>
   );
 }

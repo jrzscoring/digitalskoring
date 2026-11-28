@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from '
 import {
   AlertTriangle,
   Archive,
+  Camera,
   Check,
   CheckCircle2,
   Copy,
@@ -13,6 +14,7 @@ import {
   LogOut,
   Maximize2,
   Minimize2,
+  QrCode,
   RotateCcw,
   Search,
   Settings,
@@ -50,6 +52,7 @@ import { exportArenaSummaryPdf, exportMatchPdf } from '../utils/pdfExport';
 import { isSoundMuted, playArenaGong, setSoundMuted } from '../utils/soundEffects';
 import { AccountSessionModal } from './AccountSessionModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { QRScannerModal } from './QRScannerModal';
 import { StationSharePanel } from './StationSharePanel';
 
 interface LandingPageProps {
@@ -116,6 +119,7 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
   const { isFullscreen, toggleFullscreen } = useFullscreenState();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [showQrScannerModal, setShowQrScannerModal] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('umum');
   const [showLimitedNotice, setShowLimitedNotice] = useState(() =>
     shouldShowLimitedModeNotice({
@@ -602,6 +606,35 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
 
             {settingsTab === 'umum' && (
               <div className="space-y-4">
+                {/* Hubungkan Perangkat via Kamera Scan QR */}
+                <section
+                  data-testid="settings-qr-scanner-section"
+                  className="rounded-xl bg-cyan-950/35 border border-cyan-400/55 p-3.5 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                    <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center shrink-0">
+                      <QrCode className="w-5 h-5 text-cyan-300" />
+                    </div>
+                    <div className="space-y-0.5 text-xs">
+                      <div className="font-bold text-cyan-200">
+                        Gabung Perangkat Lain via Kamera (Scan QR)
+                      </div>
+                      <p className="text-[11px] text-blue-100/90 leading-relaxed">
+                        Arahkan kamera perangkat ini ke QR Barcode di Pengaturan Sekretaris untuk terhubung otomatis ke panel <strong className="text-white">Juri, Dewan, Timer, atau Monitor</strong> secara real-time.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="settings-open-qr-scanner-btn"
+                    onClick={() => setShowQrScannerModal(true)}
+                    className="min-h-[40px] px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-black text-xs font-extrabold flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-lg"
+                  >
+                    <Camera className="w-4 h-4 shrink-0" />
+                    <span>Buka Kamera Scan QR</span>
+                  </button>
+                </section>
+
                 {/* Akun Google & Mode Cloud Firestore per Event */}
                 <section
                   data-testid="settings-google-event-section"
@@ -680,7 +713,12 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
                         </div>
                       </div>
 
-                      <StationSharePanel arenaId={arena.id} arenaName={arena.name} compact />
+                      <StationSharePanel
+                        arenaId={arena.id}
+                        arenaName={arena.name}
+                        compact
+                        onOpenScanner={() => setShowQrScannerModal(true)}
+                      />
                     </div>
                   ) : (
                     <div className="space-y-2.5">
@@ -1272,6 +1310,16 @@ export function LandingPage({ onSelectView }: LandingPageProps) {
         </div>
       )}
       <AccountSessionModal open={showAccountModal} onClose={() => setShowAccountModal(false)} />
+      <QRScannerModal
+        open={showQrScannerModal}
+        onClose={() => setShowQrScannerModal(false)}
+        onConnected={(nextView) => {
+          setShowSettingsModal(false);
+          if (nextView !== 'landing') {
+            onSelectView(nextView);
+          }
+        }}
+      />
     </main>
   );
 }

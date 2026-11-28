@@ -12,6 +12,7 @@ import {
   isJudgeIdAllowedForMode,
   isOwnAccountArenaId,
   isSuperAdminEmail,
+  parseScannedQrPayload,
   parseStationShareLink,
   resolveCourtForArenaId,
   resolvePortalLoginInput,
@@ -230,4 +231,30 @@ test('buildStationShareUrl and parseStationShareLink support login-free Juri, Ti
     arenaId: null,
     view: null,
   });
+});
+
+test('parseScannedQrPayload parses Event QR, Station QR, JSON QR, and raw Arena ID cleanly', () => {
+  assert.deepEqual(
+    parseScannedQrPayload('https://jrzscoring.github.io/digitalskoring/?arena=arena-xyz123'),
+    { ok: true, arenaId: 'arena-xyz123', view: null }
+  );
+  assert.deepEqual(
+    parseScannedQrPayload('https://jrzscoring.github.io/digitalskoring/?arena=arena-xyz123&view=dewan'),
+    { ok: true, arenaId: 'arena-xyz123', view: 'dewan' }
+  );
+  assert.deepEqual(
+    parseScannedQrPayload('https://jrzscoring.github.io/digitalskoring/?arena=arena-xyz123&view=sekretaris'),
+    { ok: true, arenaId: 'arena-xyz123', view: null }
+  );
+  assert.deepEqual(
+    parseScannedQrPayload('{"arenaId":"arena-xyz123","view":"scoreboard"}'),
+    { ok: true, arenaId: 'arena-xyz123', view: 'scoreboard' }
+  );
+  assert.deepEqual(parseScannedQrPayload('arena-xyz123'), {
+    ok: true,
+    arenaId: 'arena-xyz123',
+    view: null,
+  });
+  const bad = parseScannedQrPayload('https://example.com/no-arena');
+  assert.equal(bad.ok, false);
 });

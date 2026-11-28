@@ -81,7 +81,7 @@ function AppContent() {
   if (!hasEnteredPortal) {
     return (
       <>
-        <NationalLoginPortal />
+        <NationalLoginPortal onNavigate={navigate} />
         <OfflineIndicator />
       </>
     );
